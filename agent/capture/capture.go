@@ -91,8 +91,13 @@ func Capture(ctx context.Context, cfg *Config) error {
 			}
 			// Timeout returns EAGAIN/EWOULDBLOCK — normal when idle. Do NOT
 			// log every occurrence; only surface real errors (EBADF, ENETDOWN, etc.).
-			if eb, ok := err.(syscall.Errno); ok && (eb == syscall.EAGAIN || eb == syscall.EWOULDBLOCK) {
-				continue
+			if eb, ok := err.(syscall.Errno); ok {
+				if eb == syscall.EAGAIN || eb == syscall.EWOULDBLOCK {
+					continue
+				}
+				if eb == syscall.EINTR {
+					continue // signal interrupted recv — retry silently
+				}
 			}
 			if cfg.ErrChan != nil {
 				select {
