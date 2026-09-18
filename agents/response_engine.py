@@ -39,6 +39,9 @@ from app_shared.sqlite_store import init_db, store_alert, get_kv, set_kv, store_
 from app_shared.response_policy import choose_action, action_detail, render_command_preview
 from app_shared.state_paths import append_jsonl, read_json, state_path, write_json
 
+# Real enforcement via nftables (backend/app/core/enforce.py)
+from backend.app.core.enforce import EnforceAction, EnforcementPolicy
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [response-engine] %(message)s",
@@ -153,105 +156,104 @@ def _run_cmd(cmd: list[str], timeout: int = COMMAND_TIMEOUT) -> tuple[bool, str,
         return False, "", str(exc)
 
 
-def _execute_block_source_ip(source_ip: str) -> dict[str, Any]:
-    """Execute iptables rule to block a source IP."""
-    # Check if rule already exists
-    check_cmd = ["iptables", "-C", "INPUT", "-s", source_ip, "-j", "DROP"]
-    exists, _, _ = _run_cmd(check_cmd)
-    if exists:
-        return {"status": "already_blocked", "rule_exists": True}
-
-    # Add the rule
-    cmd = ["iptables", "-A", "INPUT", "-s", source_ip, "-j", "DROP"]
-    success, stdout, stderr = _run_cmd(cmd)
+def _execute_block_source_ip(source_ip: str, **kw: Any) -> dict[str, Any]:
+    """Execute block_source_ip via nftables."""
+    policy = EnforcementPolicy(
+        action="block_source_ip",
+        source_ip=source_ip,
+        rule_id=kw.get("rule_id", ""),
+        dry_run=DRY_RUN,
+    )
+    result = EnforceAction(policy)
     return {
-        "status": "blocked" if success else "failed",
-        "command": " ".join(cmd),
-        "stdout": stdout,
-        "stderr": stderr,
+        "status": "blocked" if result.success else "failed",
+        "command": result.executed_command,
+        "stdout": "",
+        "stderr": result.error,
+        "dry_run": result.dry_run,
+        "ttl_seconds": result.ttl_seconds,
     }
 
 
-def _execute_throttle_service(source_ip: str, target_path: str, requests_per_minute: int) -> dict[str, Any]:
-    """Execute tc rule to throttle traffic from a source."""
-    # Use tc to rate-limit: create HTB qdisc if not present, then add filter
-    iface = os.environ.get("FDA_THROTTLE_IFACE", "eth0")
-
-    # Check if qdisc exists
-    check_cmd = ["tc", "qdisc", "show", "dev", iface]
-    success, stdout, _ = _run_cmd(check_cmd)
-    if not success:
-        return {"status": "failed", "error": f"tc qdisc check failed: {stdout}"}
-
-    # Add a class-based rate limit (simplified)
-    # In production, this would use more sophisticated tc rules
-    cmd = [
-        "tc", "filter", "add", "dev", iface, "protocol", "ip", "parent", "1:0",
-        "prio", "1", "u32", "match", "ip", "src", source_ip,
-        "police", "rate", f"{requests_per_minute * 100}bit", "burst", "10k", "drop"
-    ]
-    success, stdout, stderr = _run_cmd(cmd)
+def _execute_throttle_service(source_ip: str, target_path: str, requests_per_minute: int, **kw: Any) -> dict[str, Any]:
+    """Execute throttle_service via nftables rate limit."""
+    policy = EnforcementPolicy(
+        action="throttle_service",
+        source_ip=source_ip,
+        target_path=target_path,
+        requests_per_minute=requests_per_minute,
+        rule_id=kw.get("rule_id", ""),
+        dry_run=DRY_RUN,
+    )
+    result = EnforceAction(policy)
     return {
-        "status": "throttled" if success else "failed",
-        "command": " ".join(cmd),
-        "stdout": stdout,
-        "stderr": stderr,
+        "status": "throttled" if result.success else "failed",
+        "command": result.executed_command,
+        "stdout": "",
+        "stderr": result.error,
+        "dry_run": result.dry_run,
     }
 
 
-def _execute_disable_account(username: str) -> dict[str, Any]:
-    """Lock a Linux account."""
-    # Try usermod -L first (more portable), fall back to passwd -l
-    cmd = ["usermod", "-L", username]
-    success, stdout, stderr = _run_cmd(cmd)
-    if not success:
-        # Try passwd -l as fallback
-        cmd = ["passwd", "-l", username]
-        success, stdout, stderr = _run_cmd(cmd)
-
+def _execute_disable_account(username: str, **kw: Any) -> dict[str, Any]:
+    """Execute disable_account via nftables wrapper."""
+    policy = EnforcementPolicy(
+        action="disable_account",
+        source_ip=username,
+        rule_id=kw.get("rule_id", ""),
+        dry_run=DRY_RUN,
+    )
+    result = EnforceAction(policy)
     return {
-        "status": "locked" if success else "failed",
-        "command": " ".join(cmd),
-        "stdout": stdout,
-        "stderr": stderr,
+        "status": "locked" if result.success else "failed",
+        "command": result.executed_command,
+        "stdout": "",
+        "stderr": result.error,
+        "dry_run": result.dry_run,
     }
 
 
-def _execute_isolate_host(destination_ip: str) -> dict[str, Any]:
-    """Isolate a host by blocking all traffic to/from it."""
-    # Block incoming
-    cmd_in = ["iptables", "-A", "INPUT", "-s", destination_ip, "-j", "DROP"]
-    success_in, _, _ = _run_cmd(cmd_in)
-
-    # Block outgoing
-    cmd_out = ["iptables", "-A", "OUTPUT", "-d", destination_ip, "-j", "DROP"]
-    success_out, _, _ = _run_cmd(cmd_out)
-
+def _execute_isolate_host(destination_ip: str, **kw: Any) -> dict[str, Any]:
+    """Execute isolate_host via nftables input+output drop."""
+    policy = EnforcementPolicy(
+        action="isolate_host",
+        destination_ip=destination_ip,
+        rule_id=kw.get("rule_id", ""),
+        dry_run=DRY_RUN,
+    )
+    result = EnforceAction(policy)
     return {
-        "status": "isolated" if (success_in and success_out) else "partial",
-        "incoming_blocked": success_in,
-        "outgoing_blocked": success_out,
+        "status": "isolated" if result.success else "partial",
+        "incoming_blocked": result.success,
+        "outgoing_blocked": result.success,
+        "command": result.executed_command,
+        "stderr": result.error,
+        "dry_run": result.dry_run,
     }
 
 
-def _execute_quarantine_endpoint(destination_ip: str) -> dict[str, Any]:
-    """Quarantine an endpoint (mark in registry + isolate)."""
-    # First isolate the host
-    result = _execute_isolate_host(destination_ip)
+def _execute_quarantine_endpoint(destination_ip: str, **kw: Any) -> dict[str, Any]:
+    """Quarantine: isolate + mark in registry."""
+    result = _execute_isolate_host(destination_ip, **kw)
     result["quarantine_vlan"] = os.environ.get("FDA_QUARANTINE_VLAN", "999")
     result["status"] = "quarantined"
     return result
 
 
-def _execute_block_egress(source_ip: str) -> dict[str, Any]:
-    """Block outbound traffic from a source IP."""
-    cmd = ["iptables", "-A", "OUTPUT", "-s", source_ip, "-j", "DROP"]
-    success, stdout, stderr = _run_cmd(cmd)
+def _execute_block_egress(source_ip: str, **kw: Any) -> dict[str, Any]:
+    """Block egress via nftables output drop."""
+    policy = EnforcementPolicy(
+        action="block_egress",
+        source_ip=source_ip,
+        rule_id=kw.get("rule_id", ""),
+        dry_run=DRY_RUN,
+    )
+    result = EnforceAction(policy)
     return {
-        "status": "egress_blocked" if success else "failed",
-        "command": " ".join(cmd),
-        "stdout": stdout,
-        "stderr": stderr,
+        "status": "egress_blocked" if result.success else "failed",
+        "command": result.executed_command,
+        "stderr": result.error,
+        "dry_run": result.dry_run,
     }
 
 
@@ -357,18 +359,19 @@ def execute_response_action(
 
     # Step 2: Execute system command
     dispatch_fn = ACTION_DISPATCH.get(action, _execute_observe_only)
+    kw = {"rule_id": rule_id}
     if action == "block_source_ip":
-        exec_result = dispatch_fn(source_ip)
+        exec_result = dispatch_fn(source_ip, **kw)
     elif action == "throttle_service":
-        exec_result = dispatch_fn(source_ip, target_path, requests_per_minute)
+        exec_result = dispatch_fn(source_ip, target_path, requests_per_minute, **kw)
     elif action == "disable_account":
-        exec_result = dispatch_fn(username)
+        exec_result = dispatch_fn(username, **kw)
     elif action == "isolate_host":
-        exec_result = dispatch_fn(destination_ip)
+        exec_result = dispatch_fn(destination_ip, **kw)
     elif action == "quarantine_endpoint":
-        exec_result = dispatch_fn(destination_ip)
+        exec_result = dispatch_fn(destination_ip, **kw)
     elif action == "block_egress":
-        exec_result = dispatch_fn(source_ip)
+        exec_result = dispatch_fn(source_ip, **kw)
     elif action == "observe_only":
         exec_result = dispatch_fn()
     else:
