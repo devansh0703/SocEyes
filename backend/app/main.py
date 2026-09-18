@@ -553,29 +553,87 @@ async def resolve_query(request: Request):
 
 
 @app.post("/api/chat")
-async def chat(request: Request):
+async def soc_chat(payload: dict, request: Request):
+    """SOC investigation chat — Triage + explain an incident. Returns a structured
+    answer plus next-actions and evidence references the drawer can render."""
     body = await request.json()
     message = body.get("message", "")
-    if not NVIDIA_API_KEY:
-        return {"response": "NVIDIA API key not configured. Set NVIDIA_API_KEY environment variable.", "model": None}
+    include_llm = bool(NVIDIA_API_KEY)
+    if not message.strip():
+        return {"answer": "", "next_actions": [], "llm_generated": False, "references": {}}
     try:
+        # Pull live context the drawer can attribute to rule/log hits.
         dash = _build_dashboard()
-        dash_context = {k: v for k, v in dash.items() if k != "latest_alerts"}
-        ctx_json = json.dumps(dash_context, default=str)[:2000]
-        resp = requests.post(
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            headers={"Authorization": f"Bearer {NVIDIA_API_KEY}", "Content-Type": "application/json"},
-            json={"model": NVIDIA_MODEL, "messages": [
-                {"role": "system", "content": "You are FDA Cyber Control's AI assistant."},
-                {"role": "user", "content": f"Dashboard: {ctx_json}\n\nQuestion: {message}"},
-            ], "max_tokens": 1000, "temperature": 0.3},
-            timeout=15,
+        latest = dash.get("latest_alerts", []) or []
+        references = {
+            "rule_hits": [
+                {"rule_id": a.get("rule_id",""), "engine": a.get("engine",""), "id": a.get("id","")}
+                for a in latest[:6]
+            ],
+            "log_hits": [],
+        }
+        ctx = (
+            f"Latest alerts ({len(latest)}):\n"
+            + "\n".join(
+                f"- [{a.get('severity','?')}] {a.get('title','')}: {a.get('message','')[:200]}"
+                for a in latest[:5]
+            )
         )
-        if resp.ok:
-            return {"response": resp.json()["choices"][0]["message"]["content"].strip(), "model": NVIDIA_MODEL}
-        return {"response": f"Error: {resp.status_code}", "model": NVIDIA_MODEL}
+        system = (
+            "You are FDA Cyber Control's SOC investigation assistant. "
+            "Return STRICT JSON with these exact keys: answer (string, concise triage + what to do next), "
+            "next_actions (list of 2-5 strings, concrete operator actions), "
+            "llm_generated (true). No markdown, no backticks, no '```json' wrapper — only the JSON object."
+        )
+        user_msg = f"Dashboard context:\n{ctx}\n\nQuestion: {message}"
+        answer_text = message
+        next_actions: list[str] = []
+        resp_ok = False
+        if include_llm:
+            resp = requests.post(
+                "https://integrate.api.nvidia.com/v1/chat/completions",
+                headers={
+                    "Authorization": f"Bearer {NVIDIA_API_KEY}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "model": NVIDIA_MODEL,
+                    "messages": [
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": user_msg},
+                    ],
+                    "max_tokens": 1024,
+                    "temperature": 0.2,
+                },
+                timeout=120,
+            )
+            resp_ok = resp.ok
+            if resp_ok:
+                text = resp.json()["choices"][0]["message"]["content"].strip()
+                # Try to parse the JSON the model emitted.
+                try:
+                    parsed = json.loads(text)
+                    answer_text = parsed.get("answer", text)
+                    next_actions = parsed.get("next_actions", [])
+                    if not isinstance(next_actions, list):
+                        next_actions = []
+                except (json.JSONDecodeError, KeyError, IndexError):
+                    answer_text = text
+            else:
+                answer_text = f"API error {resp.status_code}"
+        return {
+            "answer": answer_text,
+            "next_actions": next_actions,
+            "llm_generated": include_llm and resp_ok,
+            "references": references,
+        }
     except Exception as exc:
-        return {"response": f"Error: {exc}", "model": NVIDIA_MODEL}
+        return {
+            "answer": f"Error: {exc}",
+            "next_actions": [],
+            "llm_generated": False,
+            "references": {"rule_hits": [], "log_hits": []},
+        }
 
 
 @app.get("/api/playbooks/{technique_id}")
@@ -877,8 +935,26 @@ async def response_preview(request: Request):
 @app.post("/api/response/execute")
 async def execute_response(request: Request) -> dict:
     body = await request.json()
+    # Accept both flat format (from incidents component) and nested format
+    # Flat: {"action": "...", "source_ip": "...", "rule_id": "..."}
+    # Nested: {"actions": ["..."], "payload": {"source_ip": "...", ...}}
+    flat_action = body.get("action", "")
     actions = body.get("actions", [])
     payload = body.get("payload", {})
+
+    # If flat format detected, convert to nested
+    if flat_action and not actions:
+        actions = [flat_action]
+        payload = {k: v for k, v in body.items() if k != "action"}
+
+    if not actions:
+        return {
+            "executed": [],
+            "count": 0,
+            "success": False,
+            "dry_run": DRY_RUN,
+            "results": [{"error": "No actions provided. Expected 'actions' array or 'action' string."}],
+        }
 
     # Import the real response engine
     from agents.response_engine import execute_response_action, DRY_RUN

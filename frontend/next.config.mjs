@@ -12,6 +12,14 @@ const nextConfig = {
     config.resolve.alias["@"] = __dirname;
     return config;
   },
+  async rewrites() {
+    return [
+      {
+        source: "/api/:path*",
+        destination: "http://127.0.0.1:8123/api/:path*",
+      },
+    ];
+  },
 };
 
 export default nextConfig;

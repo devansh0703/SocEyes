@@ -25,13 +25,13 @@ export function AuditLogView() {
     const load = async () => {
       try {
         // Fetch from audit log endpoint (reads from response log)
-        const payload = await apiFetch<{ items: AuditEntry[] }>("/api/responses/audit?limit=200");
+        const payload = await apiFetch<{ items: AuditEntry[] }>("/api/responses/audit/?limit=200");
         if (!active) return;
         setEntries(payload.items || []);
       } catch {
         // If no dedicated endpoint, derive from alerts + response actions
         try {
-          const alerts = await apiFetch<{ items: any[] }>("/api/alerts/live?limit=200");
+          const alerts = await apiFetch<{ items: any[] }>("/api/alerts/live/?limit=200");
           if (!active) return;
           const derived: AuditEntry[] = (alerts.items || []).map((a) => ({
             timestamp: a.timestamp,

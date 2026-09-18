@@ -69,7 +69,7 @@ def _now_iso() -> str:
 
 def _run_nft(args: list[str], dry_run: bool = False) -> tuple[bool, str, str]:
     """Run an nftables command. Returns (success, stdout, stderr)."""
-    cmd = ["nft"] + args
+    cmd = ["sudo", "nft"] + args
     cmd_str = " ".join(cmd)
 
     if dry_run:
