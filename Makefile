@@ -7,7 +7,7 @@ VENV := .venv-fda
 PID_FILE := state/fda_server.pid
 FRONTEND_OUT := frontend/out
 
-.PHONY: help install start stop restart status logs dashboard stats bootstrap clean
+.PHONY: help install start stop restart status logs dashboard stats bootstrap clean agent cloud-check
 
 help:
 	@echo "FDA Cyber Control — Standalone"
@@ -54,6 +54,15 @@ bootstrap:
 clean:
 	$(PYTHON) fda clean
 
+agent:
+	@echo "Building Go capture agent..."
+	@cd agent && go build -o ../bin/fda-agent ./main.go
+	@echo "Agent built: bin/fda-agent (run with sudo)"
+
+cloud-check:
+	@echo "Running cloud exposure checks..."
+	@$(PYTHON) scripts/check_cloud_exposure.py
+
 # ── Testing ──────────────────────────────────────────────────────────────
 .PHONY: test lint compile
 
@@ -78,6 +87,8 @@ package:
 	fi
 	@# Core source
 	@cp -r backend app_shared scripts zeroclaw agents /tmp/fda-package/
+	@mkdir -p /tmp/fda-package/agent && cp -r agent/capture /tmp/fda-package/agent/ 2>/dev/null || true
+	@cp agent/go.mod /tmp/fda-package/agent/ 2>/dev/null || true
 	@cp -r frontend/out /tmp/fda-package/frontend 2>/dev/null || echo "WARNING: frontend/out not found, run 'npm run build'"
 	@# CLI + config
 	@cp fda fda.sh install.sh install-full.sh Makefile .env.example README.md INSTRUCTIONS.md /tmp/fda-package/ 2>/dev/null || true

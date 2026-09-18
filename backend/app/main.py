@@ -733,6 +733,100 @@ def honeypot_session(session_id: str):
     raise HTTPException(status_code=404, detail="Not found")
 
 
+@app.get("/api/cloud/exposure")
+async def cloud_exposure():
+    """Run cloud asset exposure checks (AWS/Azure/GCP metadata)."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            [sys.executable, str(_ROOT / "scripts" / "check_cloud_exposure.py")],
+            capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            return {"status": "ok", "findings": json.loads(result.stdout)}
+        return {"status": "error", "error": result.stderr}
+    except Exception as exc:
+        return {"status": "error", "error": str(exc)}
+
+
+@app.get("/api/packs")
+async def list_packs():
+    """List available detection packs (directories under detection-rules/rules/)."""
+    from pathlib import Path
+    rules_dir = _ROOT / "detection-rules" / "rules"
+    packs = []
+    if rules_dir.exists():
+        for d in sorted(rules_dir.iterdir()):
+            if d.is_dir() and not d.name.startswith("_"):
+                rule_count = len(list(d.rglob("*.toml")))
+                packs.append({
+                    "id": d.name,
+                    "name": d.name.replace("_", " ").title(),
+                    "description": f"Detection rules for {d.name}",
+                    "rules_count": rule_count,
+                    "category": d.name,
+                    "tags": [d.name],
+                    "author": "fda",
+                    "version": "1.0",
+                    "updated_at": "",
+                })
+    return {"packs": packs}
+
+
+@app.get("/api/packs/{pack_id}/rules")
+async def pack_rules(pack_id: str):
+    """List rules in a detection pack."""
+    from pathlib import Path
+    import tomllib
+    rules_dir = _ROOT / "detection-rules" / "rules" / pack_id
+    rules = []
+    if rules_dir.exists():
+        for toml_file in sorted(rules_dir.rglob("*.toml")):
+            try:
+                with open(toml_file, "rb") as f:
+                    data = tomllib.load(f)
+                rule = data.get("rule", {})
+                rule_id = rule.get("rule_id") or rule.get("id") or toml_file.stem
+                tech_ids = [t["id"] for t in rule.get("threat", []) for t in t.get("technique", []) if t.get("id")]
+                rules.append({
+                    "id": rule_id,
+                    "title": rule.get("name", ""),
+                    "severity": rule.get("severity", "medium"),
+                    "engine": "elastic",
+                    "technique_ids": tech_ids,
+                    "description": rule.get("description", ""),
+                    "enabled": True,
+                })
+            except Exception:
+                pass
+    return {"rules": rules}
+
+
+@app.get("/api/marketplace/packs")
+async def marketplace_packs():
+    """List marketplace packs (currently same as local packs)."""
+    from pathlib import Path
+    rules_dir = _ROOT / "detection-rules" / "rules"
+    packs = []
+    if rules_dir.exists():
+        for d in sorted(rules_dir.iterdir()):
+            if d.is_dir() and not d.name.startswith("_"):
+                rule_count = len(list(d.rglob("*.toml")))
+                packs.append({
+                    "id": d.name,
+                    "name": d.name.replace("_", " ").title(),
+                    "description": f"Detection rules for {d.name}",
+                    "rules_count": rule_count,
+                    "category": d.name,
+                    "tags": [d.name],
+                    "author": "fda",
+                    "version": "1.0",
+                    "downloads": 0,
+                    "rating": 0,
+                })
+    return {"packs": packs}
+
+
 @app.get("/api/responses/audit")
 async def response_audit_log(limit: int = 200):
     """Return audit log of all enforcement actions + AI decisions."""
