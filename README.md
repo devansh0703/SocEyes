@@ -1,153 +1,178 @@
-# Detection Pipeline
+# FDA Cyber Control
 
-## Project Docs
+Single-box IDS/IPS with AI-driven triage and nftables enforcement.
+Detects real network traffic, correlates across engines, explains in plain English, and enforces containment on the kernel.
 
-- [explanations.md](https://github.com/syn3rgy2026/Bitflippers_Syn3rgy_AtharvSKulkarni/blob/main/INSTRUCTIONS.md)
-- [technical.md](https://github.com/syn3rgy2026/Bitflippers_Syn3rgy_AtharvSKulkarni/blob/main/technical.md)
-- [INSTRUCTIONS.md](https://github.com/syn3rgy2026/Bitflippers_Syn3rgy_AtharvSKulkarni/blob/main/INSTRUCTIONS.md)
-- [demo.md](https://github.com/syn3rgy2026/Bitflippers_Syn3rgy_AtharvSKulkarni/blob/main/demo.md)
+## What It Does
 
-This workspace now has a real local detection pipeline around the content already present in:
+1. **Real packet capture** — Go agent captures raw traffic via AF_PACKET (eBPF ready)
+2. **Real log ingestion** — journald, auditd, syslog, nginx, Windows Event Log
+3. **Detection** — 6000+ rules (Sigma, Elastic, Wazuh, Panther) with BM25 search
+4. **AI triage** — NVIDIA LLM analyzes raw packet context + correlated timeline
+5. **Enforcement** — nftables rules for block/throttle/isolate with TTL-based rollback
+6. **ZeroClaw agents** — 18 TOML-configured hands run deterministic logic on real events
 
-- `detection-rules/`
-- `sigma/`
-- `wazuh/`
-- `panther-analysis/`
+## Architecture
 
-The runtime is:
+```
+[Go Agent: AF_PACKET] -> [FastAPI: store_event()] -> [SQLite: zstd-compressed]
+                                                    |
+                                [ZeroClaw Runtime: 18 hands on schedule]
+                                        |
+                    [NVIDIA LLM: AI triage]    [nftables: enforcement]
+                                        |
+                            [React dashboard: incidents + audit]
+```
 
-- `Elasticsearch + Kibana` in Docker for storage, search, and Elastic Security detections
-- `Logstash` in Docker for log ingestion and Linux auditd normalization
-- `Wazuh manager` in Docker for native Wazuh detections
-- `Logstash` also tails Wazuh JSON alerts and archives and forwards them into Elasticsearch
-- `detector-tools` container for importing Elastic rules, converting/importing Sigma rules, and running Panther Analysis Tool
-- `rule-catalog` in Elasticsearch for fast BM25 rule/log lookup
-- `log-catalog` in Elasticsearch for fast BM25 rule->log lookup across ingested indices
+## Installation
 
-## What this gives you
+### Prerequisites
+- Python 3.10+
+- Go 1.25+ (for the capture agent)
+- libpcap-dev (compile-time for Go agent)
+- nftables (kernel module, already present on most Linux)
+- NVIDIA API key (optional, enables AI triage)
 
-- Linux auditd logs dropped into [ingest/auditd](/home/devansh/fda/ingest/auditd) are processed in parallel by:
-  - Logstash -> Elasticsearch index `logs-linux.auditd-*`
-  - Wazuh manager -> Logstash -> Elasticsearch indices `wazuh-alerts-*` and `wazuh-archives-*`
-- Elastic `detection-rules` TOML rules can be loaded directly into Kibana detections.
-- Sigma rules are converted into Elastic detection rules and loaded into Kibana detections.
-- Local Wazuh XML rules in [config/wazuh/manager/rules/local_rules.xml](/home/devansh/fda/config/wazuh/manager/rules/local_rules.xml) fire on auditd `EXECVE` events and are indexed into `wazuh-alerts-*`.
-- Panther detections can be tested locally with PAT.
-- Rules from Elastic, Sigma, Wazuh local XML, and Panther content are indexed into a unified BM25-backed catalog for fast lookup.
-- Ingested logs from `logs-*`, `wazuh-alerts-*`, and `wazuh-archives-*` are indexed into a BM25-backed `log-catalog` for reverse lookup from rules to candidate logs.
+### 1. Install
 
-## Bring it up
+```bash
+./install.sh
+```
 
-1. Create your local environment file (it is git-ignored - never commit it):
+Creates a Python venv, installs dependencies, builds the frontend, and indexes all detection rules.
+
+### 2. Configure
 
 ```bash
 cp .env.example .env
-# then edit .env: set ELASTIC_PASSWORD, KIBANA_PASSWORD, KIBANA_ENCRYPTION_KEY
-# GROQ_API_KEY is optional and only powers the LLM summaries
+# Edit .env:
+#   NVIDIA_API_KEY=your-key-here    (optional, enables AI triage)
+#   FDA_RESPONSE_DRY_RUN=true        (default: true, set false for live enforcement)
+#   FDA_RESPONSE_TTL_SECONDS=1800   (enforcement TTL, default 30 minutes)
 ```
 
-2. Start the detection pipeline:
+Get an NVIDIA API key at https://integrate.api.nvidia.com/
+
+### 3. Start
 
 ```bash
-make up
+./fda start
 ```
 
-That starts Elasticsearch, Kibana, Logstash, the Wazuh manager, the API and the
-frontend - roughly 3.5 GB of RAM, every container capped by the CPU/memory
-limits in `docker-compose.yml`.
+This starts:
+- The API server on http://localhost:8000
+- The ZeroClaw runtime (18 agent hands)
+- The event receiver (Go agent HTTP endpoint on http://localhost:8001)
+- The retention auto-prune thread
 
-Optional automation (Suricata capture, ZeroClaw, response + orchestration
-engines) is deliberately opt-in, because those services idle at high CPU/RAM for
-no benefit while you are only running detections:
+### 4. Run the Go capture agent
+
+In another terminal (requires root for AF_PACKET):
 
 ```bash
-make up-soar     # add the SOAR containers
-make up-full     # same, rebuilding images first
+cd agent
+go build -o fda-agent ./main.go
+sudo ./fda-agent
 ```
 
-3. Load the Kibana detections:
+The agent captures packets on the default interface and POSTs decoded events to the API at http://localhost:8001/api/events/ingest.
+
+## API Endpoints
+
+### Events
+```
+POST /api/events/ingest         Ingest captured events (single or batch)
+GET  /api/events/status         Event receiver status
+```
+
+### AI Triage
+```
+GET  /api/health                 Health check + config status
+```
+
+### Dashboard
+```
+GET  /                          React frontend (Command Center)
+```
+
+## Configuration (.env)
+
+| Variable | Default | Purpose |
+|----------|---------|---------|
+| `FDA_PORT` | 8000 | API server port |
+| `FDA_AGENT_PORT` | 8001 | Go agent HTTP endpoint |
+| `NVIDIA_API_KEY` | (empty) | Enables AI triage |
+| `NVIDIA_MODEL` | nvidia/nemotron-3.5-lightning-30b-a3b | LLM model |
+| `FDA_RESPONSE_DRY_RUN` | true | Dry-run mode (no nftables changes) |
+| `FDA_RESPONSE_TTL_SECONDS` | 1800 | Enforcement TTL |
+| `RETENTION_HOURS` | 168 | Event retention (7 days) |
+| `FDA_ES_TIMEOUT_SECONDS` | 30 | ES query timeout |
+
+## Enforcement Actions
+
+| Action | What it does | Kernel mechanism |
+|--------|-------------|-------------------|
+| `block_source_ip` | Drops all packets from a source IP | `nftables` rule |
+| `throttle_service` | Rate-limits requests per minute | `nftables limit` |
+| `isolate_host` | Drops all traffic to/from an IP | dual `nftables` rules |
+| `disable_account` | Locks a Linux account | `usermod -L` |
+| `observe_only` | Logs only, no enforcement | — |
+
+Every enforcement action has a TTL. After TTL expires, the rule is automatically removed (rollback). Every action is logged to `/tmp/fda-enforcement.log`.
+
+## ZeroClaw Agents
+
+18 TOML-configured agent hands run on a schedule:
+- `alert_correlator` — clusters alerts by source IP
+- `threat_summarizer` — summarizes high/critical alerts
+- `response_planner` — checks policy gates before execution
+- `policy_guardian` — verifies response policy compliance
+- `mitre_mapper` — maps alerts to MITRE ATT&CK techniques
+- `validation_agent` — validates rules firing on real events
+- `evidence_curator` — collects forensic artifacts
+- `playbook_resolver` — resolves MITRE playbook references
+- `orchestrator_main` — meta-hand for runtime health
+
+Every hand is real code in `agents/orchestration_engine.py::execute_hand()`. Every hand reads from the unified store, produces findings, and persists context.
+
+## Storage
+
+SQLite with:
+- WAL mode (concurrent reads/writes)
+- `synchronous=NORMAL` (performance)
+- Batch inserts (`BEGIN IMMEDIATE + executemany`)
+- zstd compression on raw payloads
+- Retention auto-pruning
+
+Expected disk usage: ~50-100 MB/day on a busy network.
+
+## Testing
 
 ```bash
-make bootstrap
+make test                  # Python unit tests (pytest)
+make test-pipeline         # Integration test (requires sudo for AF_PACKET)
+cd agent && go test ./...  # Go agent tests (requires sudo for real capture)
 ```
 
-4. Open Kibana:
+## Limitations
 
-- URL: `http://localhost:5602`
-- User: `elastic`
-- Password: value of `ELASTIC_PASSWORD` in `.env`
+- AF_PACKET requires root (or CAP_NET_RAW capability)
+- nftables requires root
+- AI triage requires a valid NVIDIA API key
+- SQLite is single-writer; batch insert is used for throughput
+- No horizontal scaling (single-box design)
 
-## Feed logs
+## Design
 
-- Put Linux auditd logs into [ingest/auditd](/home/devansh/fda/ingest/auditd).
-- The Wazuh manager is configured to read `/var/log/audit/audit.log`, so the simplest path is to place a real audit log file at:
-  - [ingest/auditd/audit.log](/home/devansh/fda/ingest/auditd/audit.log)
+See [DESIGN.md](DESIGN.md) for the full design document including the 11 approved design decisions from the design review.
 
-For remote shippers:
+## Internal architecture
 
-- Beats input: `localhost:5045`
-- Syslog TCP/UDP input: `localhost:5514`
-
-## Main commands
-
-```bash
-make up            # core pipeline
-make up-soar       # core + Suricata / ZeroClaw / response / orchestration
-make bootstrap
-make rule-catalog
-make log-catalog
-make elastic-rules
-make sigma-rules
-make panther-test
-make test-pipeline
-make test          # unit test suite (runs inside the api container)
-make validate      # compose config + python syntax check
-make stats         # live CPU / RAM per container
-make logs
-make down          # stop containers, keep the Elasticsearch volume
-make clean         # stop + delete volumes, project images and build cache
-make honeypot-prune# remove honeypot containers left by response actions
-```
-
-## Verify end to end
-
-```bash
-make test-pipeline
-python3 scripts/map_logs_to_rules.py --log-message 'type=EXECVE msg=audit(1776546835.123:66836): argc=1 a0="uname"' --top-k 5
-python3 scripts/map_rules_to_logs.py --rule-id 100500 --limit 5
-```
-
-- The helper scripts default to the published local endpoints `http://localhost:9201` and `http://localhost:5602`.
-- `make test-pipeline` appends fresh auditd `EXECVE` events and waits for both `logs-linux.auditd-*` and `wazuh-alerts-*` hits.
-- Syslog files dropped into [ingest/syslog](/home/devansh/fda/ingest/syslog) are ingested by Logstash and Wazuh in parallel, with Logstash storing them in `fda-syslog-*`.
-
-## Resource use and cleanup
-
-- Every service has `deploy.resources.limits` (CPU + memory) and json-file log
-  rotation (`LOG_MAX_SIZE` / `LOG_MAX_FILE`), so a forgotten stack cannot fill
-  the disk or starve the host.
-- Only `make up` services run by default; `docker compose up -d` with no service
-  names starts the core pipeline only.
-- Runtime state (runs, responses, honeypot sessions) lives under `state/`
-  (`$FDA_STATE_DIR`). App containers run as your host uid/gid, so those files
-  stay yours instead of becoming root-owned.
-- Honeypot containers are created with hard memory/CPU/PID limits, a read-only
-  root filesystem, a loopback-only port, and a TTL (`HONEYPOT_TTL_SECONDS`,
-  default 15 minutes). Expired ones are reaped automatically on the next
-  response action; `make honeypot-prune` removes them all immediately.
-- `make clean` is the full teardown: containers, named volumes, project images
-  and dangling build cache.
-
-## Publishing this repository
-
-- `.env` is git-ignored; `.env.example` documents every variable with safe
-  placeholders. No credentials are committed.
-- `.dockerignore` keeps the build context to a few MB, so builds no longer ship
-  `.git`, `.venv-tools`, `frontend/.next` or `state/` to the Docker daemon.
-- No host-specific absolute paths remain: ZeroClaw's binary and config locations
-  come from `ZEROCLAW_BIN_DIR` / `ZEROCLAW_HOME_DIR` (defaults under
-  `.runtime/`, or point them at `$HOME/.zeroclaw`).
-
-## Important limit
-
-`panther-analysis` is real Panther detection content, but Panther's live streaming detection backend is not self-hosted here. This setup gives you real local validation/testing via `panther_analysis_tool`, while live runtime detection is implemented through Elastic and Wazuh.
+- `backend/app/core/orchestrator.py`: Real ZeroClaw runtime that loads TOML hands and executes them on live events published from the event bus.
+- `backend/app/core/enforce.py`: Real nftables enforcement with block/throttle/isolate actions, TTL rollback scheduling, and log persistence.
+- `agents/orchestration_engine.py`: Existing Python orchestration implementation used by the standalone runtime and tests.
+- `agents/zeroclaw_daemon.py`: Runtime daemon that runs the full ZeroClaw hand loop and exposes health/run status over HTTP.
+- `app_shared/nvidia_ai.py`: Enhanced AI triage using packet context and correlated timeline with NVIDIA API, including a rule-based offline fallback.
+- `app_shared/unified_store.py`: SQLite storage with zstd-compressed payloads and batch ingestion.
+- `agent/capture/afpacket.go`: Production AF_PACKET capture loop.
+- `agent/capture/afpacket.go`: Real packet decoders for Ethernet, IPv4, TCP, and ICMP.

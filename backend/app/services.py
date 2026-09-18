@@ -214,6 +214,41 @@ def response_preview(payload: dict[str, Any], include_llm: bool | None = None) -
     technique_ids = [item for item in payload.get("mitre_ids", []) if item]
     technique_id = payload.get("technique_id") or (technique_ids[0] if technique_ids else "")
     severity = normalize_severity(payload.get("severity"))
+
+    # Use enhanced AI triage if API key is available
+    if include_llm and NVIDIA_API_KEY:
+        try:
+            from app_shared.nvidia_ai import ai_triage
+            # Build a minimal event from the payload for triage
+            triage_event = {
+                "title": payload.get("rule_id", ""),
+                "severity": payload.get("severity", "medium"),
+                "source_ip": payload.get("source_ip", ""),
+                "destination_ip": payload.get("destination_ip", ""),
+                "rule_id": technique_id,
+                "engine": payload.get("engine", ""),
+                "technique_ids": technique_ids,
+                "raw": payload.get("raw", {}),
+            }
+            triage_result = ai_triage(triage_event, include_llm=True, api_key=NVIDIA_API_KEY)
+            if triage_result.get("llm_generated"):
+                # Use the enhanced triage result
+                action = triage_result.get("recommended_action", "observe_only")
+                return {
+                    "technical": triage_result.get("technical_details", ""),
+                    "nontechnical": triage_result.get("summary", ""),
+                    "action": action,
+                    "verdict": triage_result.get("verdict", "unknown"),
+                    "confidence": triage_result.get("confidence", 0.5),
+                    "severity": triage_result.get("severity", severity),
+                    "technique_id": technique_id,
+                    "technique_ids": technique_ids,
+                    "playbook": playbook_detail(technique_id),
+                    "command": render_command_preview(action, {"technique_id": technique_id, "source_ip": payload.get("source_ip", "")}),
+                    "llm_generated": True,
+                }
+        except Exception as exc:
+            logger.warning("Enhanced AI triage failed, falling back: %s", exc)
     action = choose_action([technique_id] if technique_id else [])
     if severity["level"] == "low":
         action = "observe_only"

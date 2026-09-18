@@ -67,9 +67,24 @@ else
     ok "Frontend already built"
 fi
 
-# ── Step 5: Index ALL detection rules ──────────────────────────────────
+# ── Step 5: Build Go capture agent ─────────────────────────────────────
 echo ""
-echo -e "${BOLD}Step 4: Indexing all IDS rules${RESET}"
+echo -e "${BOLD}Step 5: Go capture agent${RESET}"
+if command -v go >/dev/null 2>&1; then
+    info "Building Go agent..."
+    (cd "$FDA_DIR/agent" && go build -o "$FDA_DIR/bin/fda-agent" ./main.go 2>/dev/null)
+    if [ -f "$FDA_DIR/bin/fda-agent" ]; then
+        ok "Go agent built: $FDA_DIR/bin/fda-agent"
+    else
+        warn "Go agent build failed (run 'cd agent && go build' manually)"
+    fi
+else
+    warn "Go not found — skipping agent build (install Go 1.25+ for packet capture)"
+fi
+
+# ── Step 6: Index ALL detection rules ──────────────────────────────────
+echo ""
+echo -e "${BOLD}Step 6: Indexing all IDS rules${RESET}"
 cd "$FDA_DIR"
 "$VENV_DIR/bin/python" -c "
 import sys, yaml
@@ -172,6 +187,12 @@ print(row['c'])
 ")
 echo -e "  Rules indexed: ${GREEN}${RULE_COUNT}${RESET}"
 
+if [ -f "$FDA_DIR/bin/fda-agent" ]; then
+    echo -e "  Go agent: ${GREEN}built${RESET}"
+else
+    echo -e "  Go agent: ${YELLOW}not built${RESET} (install Go 1.25+ for packet capture)"
+fi
+
 # ── Done ─────────────────────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}========================${RESET}"
@@ -183,10 +204,12 @@ echo ""
 echo "Then open:"
 echo "  ${CYAN}http://localhost:8000/${RESET}"
 echo ""
+echo "Run the capture agent (requires root):"
+echo "  ${BOLD}sudo ./bin/fda-agent${RESET}"
+echo ""
 echo "Commands:"
 echo "  ./fda start          Start server"
 echo "  ./fda stop           Stop server"
 echo "  ./fda status         Show status"
 echo "  ./fda logs           View logs"
-echo "  ./fda attack         Generate test attacks"
 echo "========================"

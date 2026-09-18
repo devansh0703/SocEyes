@@ -42,17 +42,15 @@ from app_shared.response_policy import (
     load_policy, save_policy,
 )
 from app_shared.text_utils import now_utc, clean_text
-from app_shared.attack_generators import (
-    GENERATORS, generate_attack, generate_full_attack_set, generate_realistic_attack,
-)
 from app_shared.retention import read_retention_hours
+from app_shared.state_paths import read_json, read_jsonl, state_path
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
 NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
-ATTACK_INTERVAL = float(os.environ.get("ATTACK_INTERVAL_SECONDS", "8"))
+# Event receiver is always on (no interval needed — it polls queue every 0.5s)
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", _ROOT / "frontend"))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
@@ -61,8 +59,7 @@ logger = logging.getLogger("fda.api")
 # ---------------------------------------------------------------------------
 # Background threads
 # ---------------------------------------------------------------------------
-_sim_thread: threading.Thread | None = None
-_sim_running = threading.Event()
+# Replaced by _event_receiver_running and _event_receiver_thread above
 _prune_thread: threading.Thread | None = None
 _prune_running = threading.Event()
 
@@ -77,36 +74,65 @@ _log_dir.mkdir(parents=True, exist_ok=True)
 
 
 # ---------------------------------------------------------------------------
-# Attack Simulator (Real generators)
+# Real Event Receiver (replaces attack simulator)
 # ---------------------------------------------------------------------------
-def _simulate_attack():
-    """Generate correlated attack events using real attack generators."""
-    run_id = _current_run_id()
-    return generate_realistic_attack(run_id=run_id)
+from typing import Any
+_event_queue: list[dict[str, Any]] = []
+_event_queue_lock = threading.Lock()
+_event_receiver_thread: threading.Thread | None = None
+_event_receiver_running = threading.Event()
 
 
-def _simulate_loop():
-    while _sim_running.is_set():
-        try:
-            generate_realistic_attack(run_id=_current_run_id())
-        except Exception as exc:
-            logger.warning("Attack simulation error: %s", exc)
-        time.sleep(ATTACK_INTERVAL)
+def _event_receiver_loop():
+    """Background thread: drain event queue and store + publish to ZeroClaw."""
+    while _event_receiver_running.is_set():
+        with _event_queue_lock:
+            batch = list(_event_queue)
+            _event_queue.clear()
+
+        if batch:
+            try:
+                # Store events in SQLite
+                from app_shared.unified_store import store_events_batch
+                store_events_batch(batch)
+
+                # Publish to ZeroClaw runtime event bus
+                from backend.app.core.orchestrator import publish_event_all
+                for ev in batch:
+                    publish_event_all(ev)
+            except Exception as exc:
+                logger.warning("Event receiver error: %s", exc)
+
+        time.sleep(0.5)
 
 
-def start_simulation():
-    global _sim_thread
-    if _sim_thread and _sim_thread.is_alive():
+def start_event_receiver():
+    global _event_receiver_thread
+    if _event_receiver_thread and _event_receiver_thread.is_alive():
         return
-    _sim_running.set()
-    _sim_thread = threading.Thread(target=_simulate_loop, daemon=True)
-    _sim_thread.start()
-    logger.info("Attack simulation started (interval=%.1fs)", ATTACK_INTERVAL)
+    _event_receiver_running.set()
+    _event_receiver_thread = threading.Thread(target=_event_receiver_loop, daemon=True, name="event-receiver")
+    _event_receiver_thread.start()
+    logger.info("Event receiver started (Go agent -> HTTP -> SQLite)")
 
 
-def stop_simulation():
-    _sim_running.clear()
-    logger.info("Attack simulation stopped")
+def stop_event_receiver():
+    _event_receiver_running.clear()
+    if _event_receiver_thread:
+        _event_receiver_thread.join(timeout=5)
+    logger.info("Event receiver stopped")
+
+
+def ingest_event(event: dict[str, Any]) -> dict[str, Any]:
+    """Ingest a single event from the Go agent (called by HTTP endpoint)."""
+    run_id = _current_run_id()
+    event["run_id"] = run_id
+    event["timestamp"] = event.get("timestamp") or now_utc()
+
+    with _event_queue_lock:
+        _event_queue.append(event)
+
+    return {"status": "ok", "queued": True}
 
 
 def _prune_loop():
@@ -353,7 +379,7 @@ app.add_middleware(
 async def startup():
     init_db()
     _seed_rules()
-    start_simulation()
+    start_event_receiver()
     start_prune_loop()
     start_zeroclaw()
     logger.info("FDA Cyber Control API started")
@@ -362,7 +388,7 @@ async def startup():
 
 @app.on_event("shutdown")
 async def shutdown():
-    stop_simulation()
+    stop_event_receiver()
     stop_prune_loop()
     stop_zeroclaw()
 
@@ -375,7 +401,7 @@ def health():
     return {
         "status": "ok",
         "mode": "native",
-        "simulation": _sim_running.is_set(),
+        "simulation": _event_receiver_running.is_set(),
         "zeroclaw": _orch_engine_running,
         "elasticsearch": es_available(),
     }
@@ -707,6 +733,38 @@ def honeypot_session(session_id: str):
     raise HTTPException(status_code=404, detail="Not found")
 
 
+@app.get("/api/responses/audit")
+async def response_audit_log(limit: int = 200):
+    """Return audit log of all enforcement actions + AI decisions."""
+    log_path = state_path("response", "control_actions.jsonl")
+    entries = []
+    if log_path.exists():
+        entries = read_jsonl(log_path, limit=limit)
+
+    # Also include enforcement log from core/enforce.py
+    enforce_log = state_path("response", "enforce.log")
+    enforce_entries = []
+    if enforce_log.exists():
+        with open(enforce_log) as f:
+            for line in f:
+                line = line.strip()
+                if line:
+                    enforce_entries.append({"raw": line})
+        enforce_entries = enforce_entries[-limit:]
+
+    # Also include ZeroClaw runtime decisions
+    zeroclaw_state = state_path("zeroclaw", "runtime.json")
+    zeroclaw_info = {}
+    if zeroclaw_state.exists():
+        zeroclaw_info = read_json(zeroclaw_state)
+
+    return {
+        "items": entries + enforce_entries,
+        "zeroclaw": zeroclaw_info,
+        "total": len(entries) + len(enforce_entries),
+    }
+
+
 @app.post("/api/response/preview")
 async def response_preview(request: Request):
     body = await request.json()
@@ -797,51 +855,37 @@ async def stream_overview(request: Request, start: str | None = None, end: str |
 
 
 # ---------------------------------------------------------------------------
-# Attack generator endpoint (for testing)
+# Real event ingestion endpoint (Go agent -> HTTP -> SQLite)
 # ---------------------------------------------------------------------------
-@app.post("/api/attack/generate")
-async def generate_attack_endpoint(request: Request):
-    """Generate a single attack event using real generators."""
+@app.post("/api/events/ingest")
+async def ingest_event_endpoint(request: Request):
+    """Ingest captured network events from the Go agent."""
     try:
         body = await request.json()
-        name = body.get("generator", "")
-        if name and name in GENERATORS:
-            result = generate_attack(name, run_id=_current_run_id())
-            return {"status": "ok", "result": result}
-        # Fallback to random realistic attack
-        result = generate_realistic_attack(run_id=_current_run_id())
-        return {"status": "ok", "result": result}
+        # Accept single event or batch
+        if isinstance(body, list):
+            results = []
+            for event in body:
+                result = ingest_event(event)
+                results.append(result)
+            return {"status": "ok", "ingested": len(results)}
+        else:
+            result = ingest_event(body)
+            return result
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
 
-@app.post("/api/attack/generate-batch")
-async def generate_attack_batch(request: Request):
-    """Generate multiple attack events using real generators."""
-    body = await request.json()
-    count = min(body.get("count", 5), 50)
-    generator = body.get("generator", "")
-    results = []
-    for _ in range(count):
-        try:
-            if generator and generator in GENERATORS:
-                result = generate_attack(generator, run_id=_current_run_id())
-            else:
-                result = generate_realistic_attack(run_id=_current_run_id())
-            results.append(result)
-        except Exception:
-            pass
-    return {"status": "ok", "message": f"{len(results)} attack events generated", "results": results}
-
-
-@app.post("/api/attack/generate-full")
-async def generate_full_attack(request: Request):
-    """Generate a full attack set covering all attack generators."""
-    try:
-        result = generate_full_attack_set(run_id=_current_run_id())
-        return {"status": "ok", "result": result}
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+@app.get("/api/events/status")
+async def event_status():
+    """Show event receiver status."""
+    with _event_queue_lock:
+        queue_size = len(_event_queue)
+    return {
+        "status": "ok",
+        "event_queue_size": queue_size,
+        "event_receiver_running": _event_receiver_running.is_set(),
+    }
 
 
 # ---------------------------------------------------------------------------

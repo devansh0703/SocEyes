@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bell, Bot, History, LayoutDashboard, PlaySquare, Radar, ScrollText, ShieldCheck } from "lucide-react";
+import { Bell, Bot, History, LayoutDashboard, PlaySquare, Radar, ScrollText, ShieldCheck, ShieldAlert } from "lucide-react";
 
 import { apiFetch } from "../lib/api";
 import { readCached, writeCached } from "../lib/client-cache";
@@ -14,6 +14,8 @@ const items = [
   { href: "/dashboard", label: "Command Center", icon: LayoutDashboard },
   { href: "/logs", label: "Logs", icon: ScrollText },
   { href: "/alerts", label: "Alerts", icon: Bell },
+  { href: "/incidents", label: "Incidents", icon: ShieldAlert },
+  { href: "/audit", label: "Audit", icon: ScrollText },
   { href: "/runs", label: "Runs", icon: History },
   { href: "/playbooks", label: "Playbooks", icon: PlaySquare },
   { href: "/responses", label: "Responses", icon: ShieldCheck },
