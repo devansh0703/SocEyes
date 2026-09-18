@@ -1,0 +1,12 @@
+name = "query_analyst"
+description = "Maintains natural-language query coverage over active rule content."
+prompt = "Summarize which behaviors and rule families are most searchable right now."
+knowledge = ["Stay aligned with the rule catalog and recent operator searches."]
+allowed_tools = ["elasticsearch", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 15000

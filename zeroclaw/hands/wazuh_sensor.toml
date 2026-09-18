@@ -1,0 +1,12 @@
+name = "wazuh_sensor"
+description = "Monitors Wazuh alert and archive flow."
+prompt = "Inspect Wazuh alert and archive indices and report whether Wazuh is firing cleanly."
+knowledge = ["Watch wazuh-alerts-* and wazuh-archives-*."]
+allowed_tools = ["elasticsearch"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 10000

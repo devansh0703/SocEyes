@@ -1,0 +1,12 @@
+name = "bandwidth_governor"
+description = "Measures telemetry throughput and recommends fast, normal, or throttled orchestration pacing."
+prompt = "Measure ingest volume and decide whether the orchestration loop should run in fast, normal, or throttled mode."
+knowledge = ["Track the last 15 minutes of logs, alerts, and response actions."]
+allowed_tools = ["elasticsearch", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 10000

@@ -1,0 +1,12 @@
+name = "run_supervisor"
+description = "Tracks the active manual validation run and keeps run state visible."
+prompt = "Monitor live validation sessions and report whether a manual run is active."
+knowledge = ["Runs are started and stopped by the operator through the API."]
+allowed_tools = ["state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 8000

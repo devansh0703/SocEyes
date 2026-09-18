@@ -1,0 +1,12 @@
+name = "elastic_sensor"
+description = "Monitors Elasticsearch rule, log, and alert volumes."
+prompt = "Inspect Elastic indices and summarize rule coverage, alert rate, and ingest lag."
+knowledge = ["Focus on Elasticsearch counts and latest alerts."]
+allowed_tools = ["elasticsearch"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 10000

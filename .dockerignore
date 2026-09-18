@@ -1,0 +1,46 @@
+# Keep the build context tiny.
+#
+# The images built here only need `requirements/` and `frontend/`. Every other
+# directory is bind-mounted into the running container (see docker-compose.yml),
+# so shipping it to the Docker daemon during `build` wastes hundreds of MB per
+# build and slows every rebuild down.
+
+.git
+.gitignore
+.github
+__pycache__
+**/__pycache__
+**/*.py[cod]
+**/.pytest_cache
+
+# Secrets must never enter an image layer.
+.env
+.env.*
+!.env.example
+
+# Local scratch / runtime state.
+.runtime
+.codex
+state
+ingest
+*.AppImage
+
+# Vendored detection corpora and cloned playbooks (mounted at runtime).
+detection-rules
+sigma
+wazuh
+panther-analysis
+vendor
+zeroclaw
+
+# Host tooling.
+.venv-tools
+*.md
+docs
+
+# Node artifacts (frontend/package-lock.json is still copied for `npm ci`).
+frontend/node_modules
+frontend/.next
+frontend/dist
+frontend/coverage
+frontend/*.log

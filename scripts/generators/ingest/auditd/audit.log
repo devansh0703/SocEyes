@@ -1,0 +1,6 @@
+type=EXECVE msg=audit(1776599408.123:66836): argc=1 a0="uname"
+type=EXECVE msg=audit(1776599408.456:66837): argc=2 a0="chage" a1="--list"
+type=EXECVE msg=audit(1776599434.123:66836): argc=1 a0="uname"
+type=EXECVE msg=audit(1776599434.456:66837): argc=2 a0="chage" a1="--list"
+type=EXECVE msg=audit(1789672728.123:66836): argc=1 a0="uname"
+type=EXECVE msg=audit(1789672728.456:66837): argc=2 a0="chage" a1="--list"

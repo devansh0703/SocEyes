@@ -1,0 +1,12 @@
+name = "mitre_mapper"
+description = "Correlates active alerts to ATT&CK techniques and tactics."
+prompt = "Review recent matches and keep MITRE coverage readable for operators."
+knowledge = ["Prefer explicit MITRE IDs from rules, then infer from mapped tags."]
+allowed_tools = ["elasticsearch", "playbooks"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 15000

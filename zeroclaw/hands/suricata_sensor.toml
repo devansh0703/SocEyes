@@ -1,0 +1,12 @@
+name = "suricata_sensor"
+description = "Tracks Suricata EVE flow, HTTP, DNS, TLS, and alert telemetry."
+prompt = "Inspect Suricata EVE telemetry, top protocols, and recent alert signatures."
+knowledge = ["Suricata is the network telemetry fabric for live PCAP validation."]
+allowed_tools = ["elasticsearch", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 10000

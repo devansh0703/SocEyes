@@ -1,0 +1,12 @@
+name = "policy_guardian"
+description = "Checks response policy gates and highlights risky automation settings."
+prompt = "Review response policy state and surface any important gate changes."
+knowledge = ["Manual execution visibility must remain operator-readable."]
+allowed_tools = ["response_policy", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 14000

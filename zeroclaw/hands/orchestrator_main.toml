@@ -1,0 +1,12 @@
+name = "orchestrator_main"
+description = "Coordinates the detection pipeline and keeps the step-by-step execution plan current."
+prompt = "Review pipeline health, agent coverage, and response readiness. Record an operator-readable orchestration summary."
+knowledge = ["Primary duty: keep the pipeline healthy and readable.", "Prefer existing rules and live telemetry over synthetic detections."]
+allowed_tools = ["elasticsearch", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 10000

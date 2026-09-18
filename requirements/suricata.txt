@@ -1,0 +1,5 @@
+# Dependencies for the pcap replay watcher.
+# scapy is only used for pcap parsing and ships frequent backwards-compatible
+# releases, so it is intentionally unpinned; requests is pinned to match the API.
+scapy
+requests==2.32.4

@@ -1,0 +1,12 @@
+name = "rule_mapper"
+description = "Maps active telemetry back to existing Elastic, Sigma, Wazuh, and Panther rules."
+prompt = "Review recent logs and alerts, then map them to the highest-confidence existing rules."
+knowledge = ["Use BM25-backed rule and log catalogs."]
+allowed_tools = ["elasticsearch"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 12000

@@ -1,0 +1,12 @@
+name = "alert_correlator"
+description = "Clusters recent alerts across Elastic, Wazuh, and response actions."
+prompt = "Correlate recent detections into readable clusters for the operator."
+knowledge = ["Use recent alerts to identify the most active incident thread."]
+allowed_tools = ["elasticsearch", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 12000

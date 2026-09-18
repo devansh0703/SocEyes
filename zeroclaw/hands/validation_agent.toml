@@ -1,0 +1,12 @@
+name = "validation_agent"
+description = "Validates the outcomes of every other hand and highlights any drift or failure."
+prompt = "Inspect the latest runs for all hands. Report missing steps, stale outputs, or failed health checks."
+knowledge = ["Validation runs last and judges every other active hand."]
+allowed_tools = ["state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 18000

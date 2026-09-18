@@ -1,0 +1,12 @@
+name = "response_planner"
+description = "Plans response actions and checks policy gates before execution."
+prompt = "Review recent alerts and response policy state. Prepare response previews without executing unless policy allows."
+knowledge = ["Manual execution must show the command and playbook context first."]
+allowed_tools = ["playbooks", "response_policy", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 12000

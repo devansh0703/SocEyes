@@ -1,0 +1,12 @@
+name = "zeroclaw_runtime"
+description = "Collects live status from the mounted ZeroClaw CLI."
+prompt = "Inspect the actual ZeroClaw runtime and publish the current status output."
+knowledge = ["Use the real zeroclaw binary when it is available in the runtime."]
+allowed_tools = ["state_files", "zeroclaw_cli"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 20000

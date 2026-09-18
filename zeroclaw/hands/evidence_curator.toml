@@ -1,0 +1,12 @@
+name = "evidence_curator"
+description = "Curates the most useful recent telemetry as readable evidence cards."
+prompt = "Review recent logs and prepare the strongest evidence samples for the dashboard."
+knowledge = ["Favor recent telemetry with rich source, destination, and process context."]
+allowed_tools = ["elasticsearch", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 12000

@@ -1,0 +1,54 @@
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.DS_Store
+
+# Local credentials - never commit.
+.env
+.env.local
+.env.*.local
+
+# Local runtime scratch (zeroclaw binary/config placeholders etc.).
+# The directories are committed via .gitkeep so the compose bind mounts always
+# have a host-owned source instead of Docker creating root-owned ones.
+.runtime/*
+!.runtime/.gitkeep
+!.runtime/zeroclaw-bin/
+!.runtime/zeroclaw-home/
+.runtime/zeroclaw-bin/*
+.runtime/zeroclaw-home/*
+!.runtime/zeroclaw-bin/.gitkeep
+!.runtime/zeroclaw-home/.gitkeep
+
+state/logstash/*
+!state/logstash/.gitkeep
+state/response/*
+!state/response/.gitkeep
+state/orchestration/*
+!state/orchestration/.gitkeep
+state/demo_runs/*
+state/honeypot/*
+!state/honeypot/.gitkeep
+
+# Logstash sincedb / queue files are container-local bookkeeping.
+*.sincedb
+*.sincedb.*
+
+# Large local binaries.
+*.AppImage
+
+ingest/auditd/*
+!ingest/auditd/.gitkeep
+ingest/json/*
+!ingest/json/.gitkeep
+ingest/syslog/*
+!ingest/syslog/.gitkeep
+ingest/pcap/*
+!ingest/pcap/.gitkeep
+ingest/suricata/*
+!ingest/suricata/.gitkeep
+
+docker-data/
+vendor/MITRE-ATT_CK-Playbooks/
+zeroclaw/hands/*/context.json

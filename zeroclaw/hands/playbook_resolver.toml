@@ -1,0 +1,12 @@
+name = "playbook_resolver"
+description = "Resolves SOAR playbooks and prepares human-readable response previews."
+prompt = "Review recent MITRE techniques and keep playbook previews ready for execution."
+knowledge = ["Only expose playbooks that actually resolve on disk."]
+allowed_tools = ["playbooks", "state_files"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 15000

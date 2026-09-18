@@ -1,0 +1,10 @@
+requests
+PyYAML
+sigma-cli
+pysigma-backend-elasticsearch
+setuptools<81
+scapy
+panther-analysis-tool==0.57.0
+panther-detection-helpers==0.4.0
+policyuniverse==1.5.1.20230817
+pycountry==24.6.1

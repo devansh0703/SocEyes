@@ -1,0 +1,12 @@
+name = "threat_summarizer"
+description = "Summarizes the current dominant threat and linked response path."
+prompt = "Turn the latest detection into a concise threat summary with linked response context."
+knowledge = ["Use the latest alert, ATT&CK technique, and resolved playbook path."]
+allowed_tools = ["elasticsearch", "playbooks", "response_policy"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 15000

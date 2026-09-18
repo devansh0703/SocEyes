@@ -1,0 +1,388 @@
+#!/usr/bin/env python3
+"""
+fda - FDA Cyber Control CLI (Standalone)
+No Docker, no Elasticsearch, no JVM. SQLite backend, single-process server.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import signal
+import subprocess
+import sys
+import textwrap
+import time
+import webbrowser
+from pathlib import Path
+
+_CANDIDATES = [
+    Path(__file__).resolve().parent,
+    Path.cwd(),
+    *Path.cwd().parents,
+]
+
+PROJECT_ROOT = None
+for candidate in _CANDIDATES:
+    if (candidate / "backend" / "app" / "main.py").is_file():
+        PROJECT_ROOT = candidate
+        break
+
+if PROJECT_ROOT is None:
+    PROJECT_ROOT = Path(__file__).resolve().parent
+
+ENV_FILE = PROJECT_ROOT / ".env"
+ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
+VENV_DIR = PROJECT_ROOT / ".venv-fda"
+PID_FILE = PROJECT_ROOT / "state" / "fda_server.pid"
+LOG_FILE = PROJECT_ROOT / "state" / "fda_server.log"
+STATE_DIR = PROJECT_ROOT / "state"
+FRONTEND_DIST = PROJECT_ROOT / "frontend"
+
+
+def color_print(msg, color="reset"):
+    colors = {"green": "\033[92m", "red": "\033[91m", "yellow": "\033[93m",
+              "blue": "\033[94m", "cyan": "\033[96m", "bold": "\033[1m", "reset": "\033[0m"}
+    p = colors.get(color, "")
+    s = colors["reset"] if p else ""
+    print(f"{p}{msg}{s}")
+
+
+def run(cmd, check=True, capture=False, env=None):
+    merged = os.environ.copy()
+    if env:
+        merged.update(env)
+    r = subprocess.run(cmd, shell=True, cwd=str(PROJECT_ROOT), capture_output=capture, text=True, env=merged, check=False)
+    if check and r.returncode != 0:
+        if capture and r.stderr:
+            print(r.stderr.strip(), file=sys.stderr)
+        print(f"Command failed: {cmd}", file=sys.stderr)
+        sys.exit(r.returncode)
+    return r.stdout if capture else ""
+
+
+def load_env():
+    if not ENV_FILE.exists():
+        return {}
+    entries = {}
+    for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip()
+        if key:
+            entries[key] = value
+            os.environ.setdefault(key, value)
+    return entries
+
+
+def python_bin():
+    if sys.platform.startswith("win"):
+        c = VENV_DIR / "Scripts" / "python.exe"
+    else:
+        c = VENV_DIR / "bin" / "python"
+    return str(c) if c.exists() else sys.executable
+
+
+def pip_bin():
+    return f"{python_bin()} -m pip"
+
+
+def check_python_version():
+    if sys.version_info < (3, 10):
+        color_print(f"ERROR: Python 3.10+ required", "red")
+        sys.exit(1)
+
+
+def cmd_install(args):
+    color_print("Installing FDA Cyber Control (standalone)...", "bold")
+    check_python_version()
+    if not ENV_FILE.exists():
+        if ENV_EXAMPLE.exists():
+            shutil.copy(ENV_EXAMPLE, ENV_FILE)
+            color_print(f"  Created {ENV_FILE} from .env.example", "green")
+        else:
+            color_print(f"  WARNING: .env.example not found", "yellow")
+            ENV_FILE.write_text("FDA_PORT=8000\n")
+    else:
+        color_print(f"  {ENV_FILE} already exists", "cyan")
+    STATE_DIR.mkdir(exist_ok=True)
+    if not VENV_DIR.exists():
+        color_print("  Creating Python virtual environment...", "cyan")
+        run(f"{sys.executable} -m venv {VENV_DIR}")
+        color_print(f"  Created {VENV_DIR}", "green")
+    else:
+        color_print(f"  {VENV_DIR} already exists", "cyan")
+    color_print("  Installing Python dependencies...", "cyan")
+    run(f"{pip_bin()} install --upgrade pip", check=False)
+    run(f"{pip_bin()} install -r {PROJECT_ROOT}/requirements/api.txt")
+    color_print("  Dependencies installed", "green")
+    if (PROJECT_ROOT / "frontend" / "package.json").exists():
+        color_print("  Building frontend...", "cyan")
+        if shutil.which("npm"):
+            run("npm --prefix frontend ci", check=False) or run("npm --prefix frontend install", check=False)
+            run("npm --prefix frontend run build", check=False)
+            color_print("  Frontend built", "green")
+        else:
+            color_print("  WARNING: npm not found", "yellow")
+    color_print("Install complete! Run:  fda start", "bold")
+
+
+def cmd_start(args):
+    load_env()
+    check_python_version()
+    if PID_FILE.exists():
+        try:
+            pid = int(PID_FILE.read_text().strip())
+            os.kill(pid, 0)
+            color_print(f"Server already running (PID {pid}). Use:  fda stop", "yellow")
+            return
+        except (OSError, ValueError):
+            PID_FILE.unlink(missing_ok=True)
+    if not FRONTEND_DIST.exists():
+        color_print(f"WARNING: Frontend not built: {FRONTEND_DIST}", "yellow")
+    port = os.environ.get("FDA_PORT", "8000")
+    host = os.environ.get("FDA_HOST", "0.0.0.0")
+    color_print(f"Starting FDA Cyber Control on {host}:{port}...", "bold")
+    uvicorn_cmd = f"{python_bin()} -m uvicorn backend.app.main:app --host {host} --port {port}"
+    STATE_DIR.mkdir(exist_ok=True)
+    log_handle = open(LOG_FILE, "a", encoding="utf-8")
+    proc = subprocess.Popen(uvicorn_cmd, shell=True, cwd=str(PROJECT_ROOT),
+                           stdout=log_handle, stderr=subprocess.STDOUT,
+                           env={**os.environ, "FDA_STATE_DIR": str(STATE_DIR)})
+    PID_FILE.write_text(str(proc.pid))
+    time.sleep(2)
+    if proc.poll() is not None:
+        color_print("Server failed to start. Check logs:", "red")
+        color_print(f"  tail {LOG_FILE}", "cyan")
+        sys.exit(1)
+    color_print(f"  Server started (PID {proc.pid})", "green")
+    color_print(f"  Dashboard:  http://localhost:{port}/", "cyan")
+    color_print(f"  API:        http://localhost:{port}/api/health", "cyan")
+
+
+def cmd_stop(args):
+    if not PID_FILE.exists():
+        color_print("No server running.", "yellow")
+        return
+    try:
+        pid = int(PID_FILE.read_text().strip())
+    except ValueError:
+        PID_FILE.unlink(missing_ok=True)
+        color_print("Invalid PID file.", "yellow")
+        return
+    try:
+        os.kill(pid, signal.SIGTERM)
+        color_print(f"  Sent SIGTERM to PID {pid}", "green")
+        for _ in range(10):
+            time.sleep(0.5)
+            try:
+                os.kill(pid, 0)
+            except OSError:
+                break
+        else:
+            os.kill(pid, signal.SIGKILL)
+            color_print(f"  Force-killed PID {pid}", "yellow")
+    except OSError as exc:
+        color_print(f"  Process {pid} not running: {exc}", "yellow")
+    finally:
+        PID_FILE.unlink(missing_ok=True)
+        color_print("  Server stopped.", "green")
+
+
+def cmd_restart(args):
+    cmd_stop(args)
+    time.sleep(1)
+    cmd_start(args)
+
+
+def cmd_status(args):
+    load_env()
+    port = os.environ.get("FDA_PORT", "8000")
+    color_print("FDA Cyber Control - Status", "bold")
+    print()
+    running = False
+    pid_str = "not running"
+    if PID_FILE.exists():
+        try:
+            pid = int(PID_FILE.read_text().strip())
+            os.kill(pid, 0)
+            running = True
+            pid_str = f"PID {pid}"
+        except (OSError, ValueError):
+            pid_str = "stale PID file"
+    color_print(f"  Server: {pid_str}", "green" if running else "red")
+    try:
+        import urllib.request
+        resp = urllib.request.urlopen(f"http://localhost:{port}/api/health", timeout=3)
+        health = json.loads(resp.read())
+        color_print(f"  Health: {health.get('status', 'unknown')}", "green")
+    except Exception as exc:
+        color_print(f"  Health: unreachable ({exc})", "red")
+    db_path = STATE_DIR / "fda_events.sqlite"
+    if db_path.exists():
+        try:
+            import sqlite3
+            conn = sqlite3.connect(str(db_path))
+            conn.row_factory = sqlite3.Row
+            events = conn.execute("SELECT COUNT(*) as c FROM events").fetchone()["c"]
+            alerts = conn.execute("SELECT COUNT(*) as c FROM alerts").fetchone()["c"]
+            rules = conn.execute("SELECT COUNT(*) as c FROM rules").fetchone()["c"]
+            runs = conn.execute("SELECT COUNT(*) as c FROM runs").fetchone()["c"]
+            conn.close()
+            print(f"  DB: events={events}, alerts={alerts}, rules={rules}, runs={runs}")
+        except Exception as exc:
+            print(f"  DB error: {exc}")
+    else:
+        print("  DB: not found")
+    nv = os.environ.get("NVIDIA_API_KEY", "").strip()
+    color_print(f"  NVIDIA API: {'configured' if nv else 'not set (LLM disabled)'}", "green" if nv else "yellow")
+
+
+def cmd_logs(args):
+    if not LOG_FILE.exists():
+        color_print(f"No log file at {LOG_FILE}", "yellow")
+        return
+    n = args.lines if hasattr(args, "lines") else 100
+    color_print(f"Tailing {LOG_FILE}...", "cyan")
+    subprocess.run(f"tail -n {n} -f {LOG_FILE}", shell=True, cwd=str(PROJECT_ROOT))
+
+
+def cmd_bootstrap(args):
+    load_env()
+    check_python_version()
+    color_print("Indexing detection rules...", "bold")
+    sys.path.insert(0, str(PROJECT_ROOT))
+    try:
+        from app_shared.sqlite_store import init_db, index_rule
+        import yaml
+        init_db()
+        count = 0
+        # Sigma rules (sigma/rules/**/*.yml)
+        sigma_dir = PROJECT_ROOT / "sigma" / "rules"
+        if sigma_dir.exists():
+            for yml in sigma_dir.rglob("*.yml"):
+                try:
+                    data = yaml.safe_load(yml.read_text())
+                    if isinstance(data, dict) and data.get("id"):
+                        index_rule({"rule_id": data["id"], "engine": "sigma", "title": data.get("title", ""),
+                                    "description": data.get("description", ""), "severity": data.get("level", "medium"),
+                                    "technique_ids": [], "mitre_ids": [], "file_path": str(yml), "raw": data})
+                        count += 1
+                except Exception:
+                    pass
+        # Elastic detection-rules (detection-rules/rules/**/*.toml)
+        det_dir = PROJECT_ROOT / "detection-rules" / "rules"
+        if det_dir.exists():
+            try:
+                import tomllib
+            except ImportError:
+                try:
+                    import tomli as tomllib
+                except ImportError:
+                    tomllib = None
+            if tomllib:
+                for toml_file in det_dir.rglob("*.toml"):
+                    try:
+                        with open(toml_file, "rb") as f:
+                            data = tomllib.load(f)
+                        rule = data.get("rule", {})
+                        rule_id = rule.get("rule_id") or rule.get("id")
+                        if rule_id:
+                            index_rule({"rule_id": rule_id, "engine": "elastic", "title": rule.get("name", ""),
+                                        "description": rule.get("description", ""), "severity": rule.get("severity", "medium"),
+                                        "technique_ids": [], "mitre_ids": [], "file_path": str(toml_file), "raw": data})
+                            count += 1
+                    except Exception:
+                        pass
+        color_print(f"Done. Indexed {count} rules.", "bold")
+    except Exception as exc:
+        color_print(f"Bootstrap failed: {exc}", "red")
+        sys.exit(1)
+
+
+def cmd_dashboard(args):
+    load_env()
+    port = os.environ.get("FDA_PORT", "8000")
+    url = f"http://localhost:{port}/"
+    color_print(f"Opening {url} ...", "cyan")
+    webbrowser.open(url)
+
+
+def cmd_stats(args):
+    if not PID_FILE.exists():
+        color_print("No server running.", "yellow")
+        return
+    try:
+        pid = int(PID_FILE.read_text().strip())
+        os.kill(pid, 0)
+    except (OSError, ValueError):
+        color_print("Server not running.", "yellow")
+        return
+    subprocess.run(f"ps -p {pid} -o pid,pcpu,pmem,rss,vsz,etime,comm --no-headers", shell=True)
+
+
+def cmd_clean(args):
+    color_print("Cleaning runtime state...", "red")
+    STATE_DIR.mkdir(exist_ok=True)
+    for f in STATE_DIR.glob("fda_events.sqlite*"):
+        f.unlink()
+    if LOG_FILE.exists():
+        LOG_FILE.unlink()
+    if PID_FILE.exists():
+        PID_FILE.unlink()
+    for sub in ["response", "orchestration", "logstash", "honeypot", "demo_runs"]:
+        p = STATE_DIR / sub
+        if p.exists():
+            shutil.rmtree(p)
+    color_print("  Clean complete.", "green")
+
+
+def cmd_version(args):
+    color_print("fda 2.0.0 - FDA Cyber Control (Standalone)", "bold")
+    color_print(f"Project root: {PROJECT_ROOT}", "cyan")
+    color_print(f"Python: {sys.version.split()[0]}", "cyan")
+
+
+def build_parser():
+    import argparse
+    parser = argparse.ArgumentParser(prog="fda", description="FDA Cyber Control",
+                                     formatter_class=argparse.RawDescriptionHelpFormatter,
+                                     epilog="Quick start:\n  fda install\n  fda start\n  fda bootstrap\n  fda dashboard")
+    sub = parser.add_subparsers(dest="command", required=True)
+    p = sub.add_parser("install")
+    p.set_defaults(func=cmd_install)
+    p = sub.add_parser("start")
+    p.set_defaults(func=cmd_start)
+    p = sub.add_parser("stop")
+    p.set_defaults(func=cmd_stop)
+    p = sub.add_parser("restart")
+    p.set_defaults(func=cmd_restart)
+    p = sub.add_parser("status")
+    p.set_defaults(func=cmd_status)
+    p = sub.add_parser("logs")
+    p.add_argument("-n", "--lines", type=int, default=100)
+    p.set_defaults(func=cmd_logs)
+    p = sub.add_parser("bootstrap")
+    p.set_defaults(func=cmd_bootstrap)
+    p = sub.add_parser("dashboard")
+    p.set_defaults(func=cmd_dashboard)
+    p = sub.add_parser("stats")
+    p.set_defaults(func=cmd_stats)
+    p = sub.add_parser("clean")
+    p.set_defaults(func=cmd_clean)
+    p = sub.add_parser("version")
+    p.set_defaults(func=cmd_version)
+    return parser
+
+
+def main():
+    parser = build_parser()
+    args = parser.parse_args()
+    args.func(args)
+
+
+if __name__ == "__main__":
+    main()

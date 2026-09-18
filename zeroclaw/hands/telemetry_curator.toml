@@ -1,0 +1,12 @@
+name = "telemetry_curator"
+description = "Measures the current mix of network and process telemetry."
+prompt = "Track telemetry breadth so the dashboard can show the current signal mix."
+knowledge = ["Look at Suricata network events and process-rich log catalog entries."]
+allowed_tools = ["elasticsearch"]
+model = "deterministic"
+active = true
+max_history = 120
+
+[schedule]
+kind = "every"
+every_ms = 10000
