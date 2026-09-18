@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import time
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -157,6 +158,9 @@ def ai_triage(
     api_key: str = "",
     model: str = "nvidia/nemotron-3.5-lightning-30b-a3b",
 ) -> dict[str, Any]:
+    # Read API key from environment if not passed explicitly
+    if not api_key:
+        api_key = os.environ.get("NVIDIA_API_KEY", "")
     """Enhanced AI triage with raw packet context and timeline.
 
     Returns structured verdict:
@@ -237,10 +241,18 @@ def ai_triage(
                 "Content-Type": "application/json",
             },
             json=body,
-            timeout=30,
+            timeout=120,
         )
         response.raise_for_status()
-        raw = response.json()["choices"][0]["message"]["content"].strip()
+        msg = response.json()["choices"][0]["message"]
+        # Some models return reasoning_content separately; skip it
+        raw = msg.get("content", "").strip()
+        # Strip non-JSON reasoning text: find first { and last }
+        if raw and not raw.startswith("{"):
+            start = raw.find("{")
+            end = raw.rfind("}")
+            if start != -1 and end != -1 and end > start:
+                raw = raw[start : end + 1]
         parsed = json.loads(raw)
 
         result = {
