@@ -69,15 +69,13 @@ func Capture(ctx context.Context, cfg *Config) error {
 		cfg.Stats.StartedAt = time.Now()
 	}
 
-	// Use a 1-second timeout so we can check ctx cancellation
-	tv := &syscall.Timeval{Sec: 1, Usec: 0}
+	// Use a 5-second recv timeout so blocking reads don't spin on EAGAIN.
+	// With AF_PACKET on loopback, packets arrive inline during ping/HTTP;
+	// the previous 100ms timeout fired before any packet was queued.
+	tv := &syscall.Timeval{Sec: 5, Usec: 0}
 	syscall.SetsockoptTimeval(fd, syscall.SOL_SOCKET, syscall.SO_RCVTIMEO, tv)
 
 	buf := make([]byte, 65536)
-
-	// Channel for graceful shutdown signaling
-	done := make(chan struct{})
-	defer close(done)
 
 	// Watch for context cancellation
 	go func() {
@@ -91,7 +89,11 @@ func Capture(ctx context.Context, cfg *Config) error {
 			if ctx.Err() != nil {
 				return nil // graceful
 			}
-			// EAGAIN/EWOULDBLOCK from timeout — not fatal, continue
+			// Timeout returns EAGAIN/EWOULDBLOCK — normal when idle. Do NOT
+			// log every occurrence; only surface real errors (EBADF, ENETDOWN, etc.).
+			if eb, ok := err.(syscall.Errno); ok && (eb == syscall.EAGAIN || eb == syscall.EWOULDBLOCK) {
+				continue
+			}
 			if cfg.ErrChan != nil {
 				select {
 				case cfg.ErrChan <- fmt.Errorf("recv: %v", err):
