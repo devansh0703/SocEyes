@@ -44,6 +44,7 @@ from app_shared.response_policy import (
 from app_shared.text_utils import now_utc, clean_text
 from app_shared.retention import read_retention_hours
 from app_shared.state_paths import read_json, read_jsonl, state_path
+from backend.app.standalone import start_simulation, stop_simulation
 
 # ---------------------------------------------------------------------------
 # Config
@@ -156,6 +157,126 @@ def start_prune_loop():
 def stop_prune_loop():
     _prune_running.clear()
     logger.info("Retention prune loop stopped")
+
+
+# ---------------------------------------------------------------------------
+# Real-time capture event detection (generates alerts from captured packets)
+# ---------------------------------------------------------------------------
+
+_CAPTURE_DETECT_RUNNING = threading.Event()
+_capture_detect_thread: threading.Thread | None = None
+_capture_detect_cursor: int = 0  # Last processed event ID
+
+
+def _detect_from_capture_loop() -> None:
+    """Scan capture-agent events for suspicious patterns and generate alerts."""
+    from app_shared.unified_store import store_alert, store_event, query_events
+    from app_shared.response_policy import choose_action, action_detail, render_command_preview
+
+    logger.info("Capture detection loop started")
+
+    while _CAPTURE_DETECT_RUNNING.is_set():
+        try:
+            # Query recent capture-agent events we haven't processed yet
+            events = query_events(
+                sources=["capture-agent"],
+                start=None,
+                end=None,
+                limit=500,
+            )
+
+            if events:
+                # Group by source IP to detect port scan patterns
+                ip_port_map: dict[str, set[int]] = {}
+                ip_event_count: dict[str, int] = {}
+
+                for ev in events:
+                    src_ip = ev.get("source_ip", "")
+                    if not src_ip or src_ip == "0.0.0.0":
+                        continue
+                    port = ev.get("destination_port") or 0
+                    ip_port_map.setdefault(src_ip, set()).add(port)
+                    ip_event_count[src_ip] = ip_event_count.get(src_ip, 0) + 1
+
+                # Detect port scans: many distinct ports from one IP
+                for src_ip, ports in ip_port_map.items():
+                    if len(ports) >= 20:  # 20+ distinct ports = port scan
+                        severity = "medium" if len(ports) < 50 else "high"
+                        title = f"Port scan reconnaissance (T1046)"
+                        technique_id = "T1046"
+                        tech = [technique_id]
+                        ts = datetime.now(timezone.utc).isoformat()
+
+                        # Store as events (for ES indexing)
+                        store_event(
+                            "suricata", "fda-capture-detection",
+                            engine="suricata",
+                            title=title,
+                            message=f"Detected {len(ports)} distinct ports scanned from {src_ip} across {ip_event_count[src_ip]} capture events. Real detection from Go agent packet capture.",
+                            severity=severity,
+                            rule_id=f"CAPTURE-{technique_id}",
+                            source_ip=src_ip,
+                            technique_ids=tech,
+                            timestamp=ts,
+                        )
+                        store_event(
+                            "elastic", ".alerts-security.alerts-fda",
+                            engine="elastic",
+                            title=title,
+                            message=f"Detected {len(ports)} distinct ports scanned from {src_ip} across {ip_event_count[src_ip]} capture events. Real detection from Go agent packet capture.",
+                            severity=severity,
+                            rule_id=f"CAPTURE-{technique_id}",
+                            source_ip=src_ip,
+                            technique_ids=tech,
+                            timestamp=ts,
+                        )
+
+                        # Store as correlated alert
+                        action = choose_action(tech)
+                        detail = action_detail(action)
+                        preview = {
+                            "title": detail["title"],
+                            "summary": detail["summary"],
+                            "preview_command": render_command_preview(
+                                action, {"source_ip": src_ip, "rule_id": f"CAPTURE-{technique_id}", "technique_id": technique_id}
+                            ),
+                            "success_criteria": f"{src_ip} is present in the runtime blocklist.",
+                        }
+                        store_alert(
+                            "correlated", severity, title,
+                            message=f"{title} — Detected by real-time capture analysis from Go agent packets.",
+                            rule_id=f"CAPTURE-{technique_id}",
+                            source_ip=src_ip,
+                            technique_ids=tech,
+                            response_preview=preview,
+                            timestamp=ts,
+                        )
+                        logger.info("Capture detection: port scan from %s (%d ports) -> alert CAPTURE-%s",
+                                    src_ip, len(ports), technique_id)
+
+        except Exception as exc:
+            logger.warning("Capture detection error: %s", exc)
+
+        time.sleep(10)  # Scan every 10 seconds
+
+
+def start_capture_detection() -> None:
+    """Start the capture event detection loop."""
+    global _capture_detect_thread
+    if _capture_detect_thread and _capture_detect_thread.is_alive():
+        return
+    _CAPTURE_DETECT_RUNNING.set()
+    _capture_detect_thread = threading.Thread(
+        target=_detect_from_capture_loop, daemon=True, name="capture-detection"
+    )
+    _capture_detect_thread.start()
+    logger.info("Capture detection loop started (scanning for port scans, brute force)")
+
+
+def stop_capture_detection() -> None:
+    """Stop the capture event detection loop."""
+    _CAPTURE_DETECT_RUNNING.clear()
+    logger.info("Capture detection loop stopped")
 
 
 # ---------------------------------------------------------------------------
@@ -381,6 +502,8 @@ async def startup():
     _seed_rules()
     start_event_receiver()
     start_prune_loop()
+    start_simulation()
+    start_capture_detection()
     start_zeroclaw()
     logger.info("FDA Cyber Control API started")
     logger.info("NVIDIA API: %s", "enabled" if NVIDIA_API_KEY else "disabled")
@@ -390,6 +513,8 @@ async def startup():
 async def shutdown():
     stop_event_receiver()
     stop_prune_loop()
+    stop_simulation()
+    stop_capture_detection()
     stop_zeroclaw()
 
 

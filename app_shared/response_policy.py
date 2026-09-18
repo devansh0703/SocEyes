@@ -14,7 +14,7 @@ ACTION_MAP_FILE = Path("config/response/actions.yml")
 RESPONSE_INDEX_PREFIX = "security-response"
 
 DEFAULT_POLICY: dict[str, Any] = {
-    "auto_execute": False,
+    "auto_execute": True,
     "engines": {
         "elastic": False,
         "wazuh": False,

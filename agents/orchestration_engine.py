@@ -236,11 +236,16 @@ def _hand_playbook_resolver(ctx: HandContext) -> None:
 def _hand_response_planner(ctx: HandContext) -> None:
     preview = _response_preview()
     policy = preview["policy"]
+    action = preview["action"]
     ctx.metrics.update({"auto_execute": int(bool(policy.get("auto_execute")))})
-    ctx.step("Choose response", f"Next recommended action is {preview['action']}.")
+    ctx.step("Choose response", f"Next recommended action is {action}.")
     ctx.step("Review policy gate",
              f"Auto execute is {'enabled' if policy.get('auto_execute') else 'disabled'} for the active policy.")
-    ctx.findings.append(f"Prepared response action {preview['action']} for the latest alert.")
+    ctx.findings.append(f"Prepared response action {action} for the latest alert.")
+
+    # Auto-execute the response if policy allows
+    if policy.get("auto_execute") and action != "observe_only":
+        _execute_auto_response(preview)
 
 
 def _hand_bandwidth_governor(ctx: HandContext) -> None:
@@ -408,6 +413,7 @@ def _response_preview() -> dict[str, Any]:
     latest = _recent_alerts(limit=1)
     alert = latest[0] if latest else {}
     technique_ids: list[str] = []
+    # Check nested threat.technique.id (ES format)
     threat = alert.get("threat") or {}
     technique = threat.get("technique") or {}
     ids = technique.get("id") or []
@@ -415,6 +421,13 @@ def _response_preview() -> dict[str, Any]:
         technique_ids = [str(i) for i in ids]
     elif ids:
         technique_ids = [str(ids)]
+    # Fallback: check top-level technique_ids (simulation/SQLite format)
+    if not technique_ids:
+        top_ids = alert.get("technique_ids", [])
+        if isinstance(top_ids, list):
+            technique_ids = [str(t) for t in top_ids]
+        elif top_ids:
+            technique_ids = [str(top_ids)]
     action = choose_action(technique_ids)
     technique_id = technique_ids[0] if technique_ids else ""
     playbook_path = resolve_playbook_path(technique_id)
@@ -428,16 +441,76 @@ def _response_preview() -> dict[str, Any]:
 
 def _recent_alerts(limit: int = 5) -> list[dict[str, Any]]:
     """Fetch recent alerts from ES or SQLite."""
-    hits = es_search(
-        ".alerts-security.alerts-*,wazuh-alerts-*,security-response-*",
-        {
-            "size": limit,
-            "sort": [{"@timestamp": {"order": "desc"}}],
-            "_source": True,
-            "query": {"match_all": {}},
-        },
-    )
-    return [hit.get("_source") or {} for hit in hits]
+    try:
+        hits = es_search(
+            ".alerts-security.alerts-*,wazuh-alerts-*,security-response-*",
+            {
+                "size": limit,
+                "sort": [{"@timestamp": {"order": "desc"}}],
+                "_source": True,
+                "query": {"match_all": {}},
+            },
+        )
+        results = [hit.get("_source") or {} for hit in hits]
+        if results:
+            return results
+    except Exception:
+        pass
+
+    # Fallback: read from SQLite via unified store
+    try:
+        from app_shared.unified_store import get_latest_alerts
+        return get_latest_alerts(limit=limit)
+    except Exception:
+        return []
+
+
+def _execute_auto_response(preview: dict[str, Any]) -> None:
+    """Execute the recommended response action via the backend API."""
+    import requests
+
+    alert = _recent_alerts(limit=1)[0] if _recent_alerts(limit=1) else {}
+    source_ip = alert.get("source_ip", "")
+    destination_ip = alert.get("destination_ip", "")
+    rule_id = alert.get("rule_id", "")
+    technique_ids = []
+    tech = alert.get("technique") or {}
+    ids = tech.get("id") or []
+    if isinstance(ids, list):
+        technique_ids = [str(i) for i in ids]
+    elif ids:
+        technique_ids = [str(ids)]
+    technique_id = technique_ids[0] if technique_ids else ""
+
+    if not source_ip:
+        return
+
+    api_url = os.environ.get("API_URL", "http://127.0.0.1:8123")
+    try:
+        resp = requests.post(
+            f"{api_url}/api/response/execute",
+            json={
+                "action": preview["action"],
+                "source_ip": source_ip,
+                "destination_ip": destination_ip,
+                "rule_id": rule_id,
+                "technique_id": technique_id,
+            },
+            timeout=30,
+        )
+        if resp.ok:
+            result = resp.json()
+            if result.get("success"):
+                logger.info("Auto-response executed: %s for %s (success=%s)",
+                            preview["action"], source_ip, result.get("success"))
+            else:
+                logger.warning("Auto-response failed: %s for %s (success=%s)",
+                               preview["action"], source_ip, result.get("success"))
+        else:
+            logger.warning("Auto-response API error: %s for %s (status=%s)",
+                           preview["action"], source_ip, resp.status_code)
+    except Exception as exc:
+        logger.error("Auto-response exception: %s", exc)
 
 
 def _load_current_run() -> dict[str, Any]:
