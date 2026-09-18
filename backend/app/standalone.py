@@ -140,6 +140,29 @@ def _simulate_loop():
 
 
 def start_simulation():
+    """Start attack simulation. Only runs in testing mode.
+
+    Simulation generates fake alerts for testing the full pipeline
+    (alerts → AI triage → enforcement). In production mode
+    (FDA_RESPONSE_DRY_RUN=false), simulation is ALWAYS disabled —
+    the app relies on real packet capture → real detection → real alerts.
+
+    To enable simulation for testing: set FDA_ENABLE_SIMULATION=true
+    AND FDA_RESPONSE_DRY_RUN=true.
+    """
+    dry_run = os.environ.get("FDA_RESPONSE_DRY_RUN", "").lower() in ("1", "true", "yes")
+    sim_enabled = os.environ.get("FDA_ENABLE_SIMULATION", "").lower() in ("1", "true", "yes")
+
+    # Production mode: never run simulation
+    if not dry_run:
+        logger.info("Attack simulation disabled (production mode: FDA_RESPONSE_DRY_RUN=false)")
+        return
+
+    # Testing mode: simulation only if explicitly enabled
+    if not sim_enabled:
+        logger.info("Attack simulation disabled (FDA_ENABLE_SIMULATION not set)")
+        return
+
     global _sim_thread
     if _sim_thread and _sim_thread.is_alive():
         return
