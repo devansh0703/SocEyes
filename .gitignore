@@ -8,6 +8,18 @@ __pycache__/
 .env
 .env.local
 .env.*.local
+!.env.example
+
+# Python tooling.
+.venv/
+.venv*
+venv/
+*.egg-info/
+
+# Test / tool caches.
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
 
 # Local runtime scratch (zeroclaw binary/config placeholders etc.).
 # The directories are committed via .gitkeep so the compose bind mounts always
@@ -21,6 +33,11 @@ __pycache__/
 !.runtime/zeroclaw-bin/.gitkeep
 !.runtime/zeroclaw-home/.gitkeep
 
+# Runtime state - databases, logs, and scratch. Never commit.
+state/*.sqlite
+state/*.sqlite-*
+state/logs/*
+!state/logs/.gitkeep
 state/logstash/*
 !state/logstash/.gitkeep
 state/response/*
@@ -30,6 +47,8 @@ state/orchestration/*
 state/demo_runs/*
 state/honeypot/*
 !state/honeypot/.gitkeep
+logs/
+pcap/
 
 # Logstash sincedb / queue files are container-local bookkeeping.
 *.sincedb
@@ -49,6 +68,26 @@ ingest/pcap/*
 ingest/suricata/*
 !ingest/suricata/.gitkeep
 
+# Compiled / bundled agent binary.
+agent/fda-agent
+
+# Accidentally captured host home-dir files.
+home/
+
+# Docker / ephemeral data.
 docker-data/
-vendor/MITRE-ATT_CK-Playbooks/
+
+# Vendored detection corpora and cloned playbooks (mounted at runtime).
+detection-rules/
+sigma/
+wazuh/
+panther-analysis/
+vendor/
 zeroclaw/hands/*/context.json
+
+# Frontend build output.
+frontend/.next/
+frontend/out/
+frontend/dist/
+frontend/coverage/
+frontend/*.log
