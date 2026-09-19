@@ -52,7 +52,15 @@ from backend.app.standalone import start_simulation, stop_simulation, _sim_runni
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
 NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
 # Event receiver is always on (no interval needed — it polls queue every 0.5s)
-FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", _ROOT / "frontend"))
+def _default_frontend_dist() -> Path:
+    """Prefer the Next.js static export (frontend/out); fall back to frontend/"""
+    out = _ROOT / "frontend" / "out"
+    if (out / "index.html").exists():
+        return out
+    return _ROOT / "frontend"
+
+
+FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", _default_frontend_dist()))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
 logger = logging.getLogger("fda.api")
@@ -674,30 +682,80 @@ def _current_run_id() -> str | None:
 
 
 def _build_dashboard(start=None, end=None, run_id=None) -> dict:
-    summary = get_analytics_summary(start=start, end=end, run_id=run_id or _current_run_id())
-    summary["rules_total"] = _rule_count()
-    latest = get_latest_alerts(limit=12)
-    summary["latest_alerts"] = [{
-        "id": a.get("id", a.get("run_id")),
-        "engine": a.get("engine", "correlated"),
-        "title": a.get("title", ""),
-        "severity": a.get("severity", "medium"),
-        "timestamp": a.get("timestamp", ""),
-        "message": a.get("message", ""),
-        "technique_ids": a.get("technique_ids", []),
-        "response_preview": a.get("response_preview", {}),
-    } for a in latest]
-    if latest:
-        rp = latest[0].get("response_preview", {})
-        summary["response_preview"] = rp if isinstance(rp, dict) else json.loads(rp) if isinstance(rp, str) else {}
-    else:
-        summary["response_preview"] = {}
-    summary["zeroclaw"] = {
-        "available": _orch_engine_running,
-        "summary": "Orchestration engine active" if _orch_engine_running else "Orchestration engine not running",
-    }
-    summary["response_actions_total"] = get_kv("response_actions_total", 0)
-    return summary
+    # Dashboard aggregates scan millions of SQLite rows (tens of seconds on a
+    # cold cache). Serve a cached/stale payload immediately and refresh it in
+    # the background so no request ever waits on a full rebuild.
+    cache_key = f"{start or ''}|{end or ''}|{run_id or _current_run_id()}"
+    now = time.time()
+    with _dashboard_lock:
+        cached = _dashboard_cache.get(cache_key)
+    if cached and (now - cached[0]) < _DASHBOARD_TTL_SECONDS:
+        return cached[1]
+    if cache_key in _dashboard_rebuilding:
+        # A rebuild is already running: wait briefly for it rather than stacking
+        # another multi-second query load on the store.
+        deadline = now + _DASHBOARD_REBUILD_WAIT_SECONDS
+        while time.time() < deadline:
+            time.sleep(0.5)
+            with _dashboard_lock:
+                cached = _dashboard_cache.get(cache_key)
+            if cached and cached[0] > now:
+                return cached[1]
+    if cached:
+        # stale-while-revalidate: hand back the stale payload now, refresh async
+        with _dashboard_lock:
+            _dashboard_rebuilding.add(cache_key)
+        threading.Thread(target=_rebuild_dashboard, args=(start, end, run_id, cache_key),
+                         daemon=True, name="dashboard-revalidate").start()
+        return cached[1]
+    # No cached payload at all (cold start): register the key so concurrent
+    # first requests coalesce onto one rebuild instead of stacking queries.
+    with _dashboard_lock:
+        _dashboard_rebuilding.add(cache_key)
+    return _rebuild_dashboard(start, end, run_id, cache_key)
+
+
+def _rebuild_dashboard(start=None, end=None, run_id=None, cache_key: str = "") -> dict:
+    try:
+        summary = get_analytics_summary(start=start, end=end, run_id=run_id or _current_run_id())
+        summary["rules_total"] = _rule_count()
+        latest = get_latest_alerts(limit=12)
+        summary["latest_alerts"] = [{
+            "id": a.get("id", a.get("run_id")),
+            "engine": a.get("engine", "correlated"),
+            "title": a.get("title", ""),
+            "severity": a.get("severity", "medium"),
+            "timestamp": a.get("timestamp", ""),
+            "message": a.get("message", ""),
+            "technique_ids": a.get("technique_ids", []),
+            "response_preview": a.get("response_preview", {}),
+        } for a in latest]
+        if latest:
+            rp = latest[0].get("response_preview", {})
+            summary["response_preview"] = rp if isinstance(rp, dict) else json.loads(rp) if isinstance(rp, str) else {}
+        else:
+            summary["response_preview"] = {}
+        summary["zeroclaw"] = {
+            "available": _orch_engine_running,
+            "summary": "Orchestration engine active" if _orch_engine_running else "Orchestration engine not running",
+        }
+        summary["response_actions_total"] = get_kv("response_actions_total", 0)
+        with _dashboard_lock:
+            _dashboard_cache[cache_key] = (time.time(), summary)
+        return summary
+    finally:
+        with _dashboard_lock:
+            _dashboard_rebuilding.discard(cache_key)
+        with _dashboard_lock:
+            _dashboard_rebuilding.discard(cache_key)
+
+
+# --- dashboard payload cache (key -> (built_at, payload)) -------------------
+_DASHBOARD_TTL_SECONDS = float(os.environ.get("FDA_DASHBOARD_TTL_SECONDS", "30"))
+_DASHBOARD_REBUILD_WAIT_SECONDS = float(os.environ.get("FDA_DASHBOARD_REBUILD_WAIT_SECONDS", "45"))
+_dashboard_cache: dict[str, tuple[float, dict]] = {}
+_dashboard_rebuilding: set[str] = set()
+_dashboard_lock = threading.Lock()
 
 
 def _rule_count() -> int:
@@ -728,6 +786,7 @@ async def startup():
     start_simulation()
     start_capture_detection()
     start_zeroclaw()
+    threading.Thread(target=_build_dashboard, daemon=True, name="dashboard-warmup").start()
     logger.info("FDA Cyber Control API started")
     logger.info("NVIDIA API: %s", "enabled" if NVIDIA_API_KEY else "disabled")
 
@@ -1429,10 +1488,18 @@ def serve_next_static(path: str):
 
 @app.get("/{full_path:path}")
 async def serve_spa(full_path: str):
-    """Serve index.html for SPA routes."""
+    """Serve pre-rendered page HTML for app routes; fall back to the SPA shell."""
     if full_path.startswith("api/") or full_path.startswith("_next/"):
         raise HTTPException(status_code=404)
     if FRONTEND_DIST.exists():
+        candidate = (FRONTEND_DIST / full_path).resolve()
+        dist_root = FRONTEND_DIST.resolve()
+        if candidate.is_file() and dist_root in candidate.parents:
+            return FileResponse(candidate)
+        for rel in ((full_path.rstrip("/"), "index.html"), ("index.html",)):
+            page_file = FRONTEND_DIST.joinpath(*[p for p in rel if p]).resolve()
+            if page_file.is_file() and dist_root in page_file.parents:
+                return FileResponse(page_file)
         index_file = FRONTEND_DIST / "index.html"
         if index_file.exists():
             return FileResponse(index_file)
