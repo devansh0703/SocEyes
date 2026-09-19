@@ -44,7 +44,7 @@ from app_shared.response_policy import (
 from app_shared.text_utils import now_utc, clean_text
 from app_shared.retention import read_retention_hours
 from app_shared.state_paths import read_json, read_jsonl, state_path
-from backend.app.standalone import start_simulation, stop_simulation
+from backend.app.standalone import start_simulation, stop_simulation, _sim_running
 
 # ---------------------------------------------------------------------------
 # Config
@@ -513,7 +513,6 @@ async def startup():
 async def shutdown():
     stop_event_receiver()
     stop_prune_loop()
-    stop_simulation()
     stop_capture_detection()
     stop_zeroclaw()
 
@@ -526,7 +525,7 @@ def health():
     return {
         "status": "ok",
         "mode": "native",
-        "simulation": _event_receiver_running.is_set(),
+        "simulation": _sim_running.is_set(),
         "zeroclaw": _orch_engine_running,
         "elasticsearch": es_available(),
     }
