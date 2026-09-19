@@ -532,6 +532,7 @@ _SOURCE_INDEX_MAP = {
     "elastic": ".alerts-security.alerts-*",
     "response": "security-response-*",
     "run": "fda-runs-*",
+    "capture": "fda-agent-capture",
 }
 
 

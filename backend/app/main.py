@@ -739,6 +739,14 @@ def _rebuild_dashboard(start=None, end=None, run_id=None, cache_key: str = "") -
             "available": _orch_engine_running,
             "summary": "Orchestration engine active" if _orch_engine_running else "Orchestration engine not running",
         }
+        from agents.orchestration_engine import get_latest_runs
+        engine_runs = get_latest_runs()
+        summary["agents"] = {
+            "hands": [
+                {"hand_name": name, "status": {"status": run.get("status", {}).get("status", "active")}}
+                for name, run in engine_runs.items()
+            ]
+        }
         summary["response_actions_total"] = get_kv("response_actions_total", 0)
         with _dashboard_lock:
             _dashboard_cache[cache_key] = (time.time(), summary)
