@@ -44,7 +44,9 @@ from app_shared.response_policy import (
 from app_shared.text_utils import now_utc, clean_text
 from app_shared.retention import read_retention_hours
 from app_shared.state_paths import read_json, read_jsonl, state_path
-from backend.app.standalone import start_simulation, stop_simulation, _sim_running  # _sim_running kept for health contract; start/stop are test-only no-ops
+from backend.app.standalone import _sim_running  # legacy health-contract flag; always unset in the server
+# NOTE: attack simulation lives in backend.app.standalone but is TEST-ONLY —
+# nothing in the server imports or calls it.
 
 # ---------------------------------------------------------------------------
 # Config
@@ -839,7 +841,6 @@ async def startup():
     _seed_rules()
     start_event_receiver()
     start_prune_loop()
-    start_simulation()
     start_capture_detection()
     start_zeroclaw()
     threading.Thread(target=_build_dashboard, daemon=True, name="dashboard-warmup").start()
@@ -1625,4 +1626,4 @@ async def serve_spa(full_path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("backend.app.agents_api:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=False)

@@ -90,13 +90,18 @@ def _simulate_loop():
 
 
 def start_simulation():
-    global _sim_thread
-    if _sim_thread and _sim_thread.is_alive():
-        return
-    _sim_running.set()
-    _sim_thread = threading.Thread(target=_simulate_loop, daemon=True)
-    _sim_thread.start()
-    logger.info("Attack simulation started (interval=%.1fs)", ATTACK_INTERVAL)
+    """Attack simulation is TEST-ONLY and never runs inside the API server.
+
+    The product pipeline is real: packet capture -> detection -> alerts ->
+    AI triage -> enforcement. Synthetic attacks exist solely for the pytest
+    suite (see tests/), which drives the generators directly. This is a hard
+    no-op that logs loudly if ever invoked in a server process.
+    """
+    logger.warning(
+        "start_simulation() called in the server process — refused. "
+        "Attack simulation is test-only."
+    )
+    return None
 
 
 def stop_simulation():
@@ -339,7 +344,6 @@ app.add_middleware(
 async def startup():
     init_db()
     _seed_rules()
-    start_simulation()
     start_prune_loop()
     start_zeroclaw()
     logger.info("FDA Cyber Control API started")

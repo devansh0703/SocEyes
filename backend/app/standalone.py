@@ -140,39 +140,22 @@ def _simulate_loop():
 
 
 def start_simulation():
-    """Start attack simulation. Only runs in testing mode.
+    """Attack simulation is TEST-ONLY and never runs inside the API server.
 
-    Simulation generates fake alerts for testing the full pipeline
-    (alerts → AI triage → enforcement). In production mode
-    (FDA_RESPONSE_DRY_RUN=false), simulation is ALWAYS disabled —
-    the app relies on real packet capture → real detection → real alerts.
-
-    To enable simulation for testing: set FDA_ENABLE_SIMULATION=true
-    AND FDA_RESPONSE_DRY_RUN=true.
+    The product pipeline is real: packet capture -> detection -> alerts ->
+    AI triage -> enforcement. Synthetic attacks exist solely for the pytest
+    suite (see tests/), which imports _simulate_attack directly. The server
+    must never seed fake alerts, so this is a hard no-op that logs loudly.
     """
-    dry_run = os.environ.get("FDA_RESPONSE_DRY_RUN", "").lower() in ("1", "true", "yes")
-    sim_enabled = os.environ.get("FDA_ENABLE_SIMULATION", "").lower() in ("1", "true", "yes")
-
-    # Production mode: never run simulation
-    if not dry_run:
-        logger.info("Attack simulation disabled (production mode: FDA_RESPONSE_DRY_RUN=false)")
-        return
-
-    # Testing mode: simulation only if explicitly enabled
-    if not sim_enabled:
-        logger.info("Attack simulation disabled (FDA_ENABLE_SIMULATION not set)")
-        return
-
-    global _sim_thread
-    if _sim_thread and _sim_thread.is_alive():
-        return
-    _sim_running.set()
-    _sim_thread = threading.Thread(target=_simulate_loop, daemon=True)
-    _sim_thread.start()
-    logger.info("Attack simulation started (interval=%.1fs)", ATTACK_INTERVAL)
+    logger.warning(
+        "start_simulation() called in the server process — refused. "
+        "Attack simulation is test-only (tests/ imports _simulate_attack directly)."
+    )
+    return None
 
 
 def stop_simulation():
+    """No-op companion to the test-only simulation guard."""
     _sim_running.clear()
     logger.info("Attack simulation stopped")
 
