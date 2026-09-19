@@ -964,6 +964,10 @@ def get_analytics_summary(
                     {"label": b.get("key") or "unknown", "value": b.get("doc_count", 0)}
                     for b in ((sev_aggs.get("destinations") or {}).get("buckets") or [])
                 ],
+                "top_ports": [],
+                "agent_run_mix": [],
+                "top_usernames": [],
+                "network_transports": [],
             }
 
             return {
@@ -1044,6 +1048,26 @@ def get_analytics_summary(
         ).fetchall()
         suricata_protos = [{"label": r["proto"], "value": r["count"]} for r in protos]
 
+        top_ports = conn.execute(
+            "SELECT destination_port AS port, COUNT(*) AS count FROM events WHERE destination_port IS NOT NULL GROUP BY destination_port ORDER BY count DESC LIMIT 8"
+        ).fetchall()
+        top_ports_list = [{"label": str(r["port"]), "value": r["count"]} for r in top_ports]
+
+        agent_run_mix = conn.execute(
+            "SELECT engine AS label, COUNT(*) AS value FROM events WHERE source='response' AND engine IS NOT NULL GROUP BY engine ORDER BY value DESC LIMIT 8"
+        ).fetchall()
+        agent_run_mix_list = [{"label": r["label"], "value": r["value"]} for r in agent_run_mix]
+
+        user_rows = conn.execute(
+            "SELECT user_name AS label, COUNT(*) AS value FROM events WHERE user_name IS NOT NULL AND user_name != '' GROUP BY user_name ORDER BY value DESC LIMIT 8"
+        ).fetchall()
+        top_usernames = [{"label": r["label"], "value": r["value"]} for r in user_rows]
+
+        transport_rows = conn.execute(
+            "SELECT network_transport AS label, COUNT(*) AS value FROM events WHERE network_transport IS NOT NULL GROUP BY network_transport ORDER BY value DESC LIMIT 8"
+        ).fetchall()
+        network_transports = [{"label": r["label"], "value": r["value"]} for r in transport_rows]
+
         rules_total = conn.execute("SELECT COUNT(*) as c FROM rules").fetchone()["c"]
         response_actions_total = conn.execute("SELECT COUNT(*) as c FROM events WHERE source='response'").fetchone()["c"]
 
@@ -1064,6 +1088,10 @@ def get_analytics_summary(
             "suricata_event_types": suricata_types,
             "top_sources": top_sources_list,
             "top_destinations": top_destinations,
+            "top_ports": top_ports_list,
+            "agent_run_mix": agent_run_mix_list,
+            "top_usernames": top_usernames,
+            "network_transports": network_transports,
         },
     }
 

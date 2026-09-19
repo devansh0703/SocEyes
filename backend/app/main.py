@@ -1064,11 +1064,26 @@ def playbook_detail(technique_id: str):
 
 @app.get("/api/agents/live")
 def agents_live():
+    """ZeroClaw hands with their latest real run records (frontend HandRun contract)."""
+    from agents.orchestration_engine import get_latest_runs
+
+    engine_runs = get_latest_runs()
+    hands: list[dict] = []
     hands_dir = _ROOT / "zeroclaw" / "hands"
-    hands = []
-    if hands_dir.exists():
-        for toml_file in sorted(hands_dir.glob("*.toml")):
-            hands.append({"hand": toml_file.stem, "status": "active" if _orch_engine_running else "idle"})
+    for toml_file in sorted(hands_dir.glob("*.toml")):
+        name = toml_file.stem
+        run = engine_runs.get(name)
+        if run:
+            hands.append(run)
+        else:
+            hands.append({
+                "hand_name": name,
+                "run_id": f"{name}-pending",
+                "status": {"status": "active" if _orch_engine_running else "idle"},
+                "findings": [],
+                "steps": [],
+                "metrics": {},
+            })
     return {"hands": hands, "last_update": now_utc(), "count": len(hands)}
 
 
@@ -1293,33 +1308,38 @@ async def marketplace_packs():
 
 @app.get("/api/responses/audit")
 async def response_audit_log(limit: int = 200):
-    """Return audit log of all enforcement actions + AI decisions."""
+    """Audit log of all enforcement actions + AI decisions (frontend AuditEntry contract)."""
     log_path = state_path("response", "control_actions.jsonl")
     entries = []
     if log_path.exists():
-        entries = read_jsonl(log_path, limit=limit)
+        for raw in read_jsonl(log_path, limit=limit):
+            if not isinstance(raw, dict):
+                continue
+            action = str(raw.get("action") or "unknown")
+            status = str(raw.get("status") or ("executed" if raw.get("updated") else "recorded"))
+            entries.append({
+                "timestamp": raw.get("@timestamp") or raw.get("timestamp") or raw.get("updated_at") or "",
+                "type": "observation" if action == "observe_only" else "enforcement",
+                "rule_id": raw.get("rule_id") or "",
+                "source_ip": raw.get("source_ip") or "",
+                "action": action,
+                "verdict": status,
+                "severity": raw.get("severity"),
+                "summary": raw.get("message") or "",
+                "technique_id": raw.get("technique_id"),
+                "username": raw.get("username") or "",
+            })
 
-    # Also include enforcement log from core/enforce.py
-    enforce_log = state_path("response", "enforce.log")
-    enforce_entries = []
-    if enforce_log.exists():
-        with open(enforce_log) as f:
-            for line in f:
-                line = line.strip()
-                if line:
-                    enforce_entries.append({"raw": line})
-        enforce_entries = enforce_entries[-limit:]
-
-    # Also include ZeroClaw runtime decisions
+    # ZeroClaw runtime decisions context
     zeroclaw_state = state_path("zeroclaw", "runtime.json")
     zeroclaw_info = {}
     if zeroclaw_state.exists():
         zeroclaw_info = read_json(zeroclaw_state)
 
     return {
-        "items": entries + enforce_entries,
+        "items": entries,
         "zeroclaw": zeroclaw_info,
-        "total": len(entries) + len(enforce_entries),
+        "total": len(entries),
     }
 
 
