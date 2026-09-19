@@ -695,7 +695,10 @@ async def put_policy(request: Request):
 
 @app.get("/api/response/runtime")
 def get_runtime():
-    return {}
+    """Live response control-plane state (blocklists, rate limits, disabled
+    accounts) — read from state/response/runtime control files."""
+    from backend.app.runtime_controls import load_controls
+    return load_controls()
 
 
 @app.get("/api/honeypot/sessions")
