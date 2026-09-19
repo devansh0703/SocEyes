@@ -247,7 +247,7 @@ do_start() {
     if ! is_running api; then
         [ -d "$VENV_DIR" ] || do_install
         info "Starting FastAPI backend..."
-        start_service api "$VENV_DIR/bin/python" -m uvicorn backend.app.agents_api:app --host 0.0.0.0 --port 8000
+        start_service api "$VENV_DIR/bin/python" -m uvicorn backend.app.main:app --host 0.0.0.0 --port 8000
         wait_for_port 8000 15
         ok "API running on :8000"
     else
