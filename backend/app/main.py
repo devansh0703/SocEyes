@@ -785,6 +785,15 @@ app.add_middleware(
 )
 
 
+@app.middleware("http")
+async def normalize_api_trailing_slash(request, call_next):
+    """Frontend fetches use trailing slashes (/api/x/?limit=1); route them."""
+    path = request.scope.get("path", "")
+    if path.startswith("/api/") and path.endswith("/") and len(path) > 5:
+        request.scope["path"] = path.rstrip("/")
+    return await call_next(request)
+
+
 @app.on_event("startup")
 async def startup():
     init_db()

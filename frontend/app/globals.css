@@ -547,6 +547,475 @@ select {
 }
 
 /* --- Chips --- */
+/* ========================================================================
+   QA hotfix (2026-09-20): styles for components that shipped without CSS.
+   Same tech-brutalist language: hard borders, blue-only palette, no radius.
+   ======================================================================== */
+
+/* --- Hero actions (mission page CTA row previously overlapped cards) --- */
+.hero-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin: 18px 0;
+}
+
+/* --- Incidents view --- */
+.incidents-layout {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.4fr) 1fr;
+  gap: 20px;
+  align-items: start;
+}
+
+.incident-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 72vh;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.incident-card {
+  display: block;
+  width: 100%;
+  text-align: left;
+  background: var(--panel);
+  border: 3px solid var(--blue-700);
+  padding: 12px 14px;
+  cursor: pointer;
+  color: var(--text-dark);
+  font-family: var(--font-body), sans-serif;
+}
+
+.incident-card:hover {
+  border-color: var(--blue-500);
+}
+
+.incident-card.selected {
+  border-color: var(--blue-400);
+  background: var(--panel-soft);
+}
+
+.incident-severity {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.incident-title {
+  margin-top: 4px;
+  font-weight: 800;
+  font-size: 0.95rem;
+  color: var(--text-dark);
+}
+
+.incident-meta {
+  margin-top: 2px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.incident-detail {
+  background: var(--panel);
+  border: 3px solid var(--blue-700);
+  padding: 20px;
+}
+
+.detail-severity-badge {
+  display: inline-block;
+  padding: 5px 12px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.75rem;
+  font-weight: 800;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #ffffff;
+}
+
+.detail-title {
+  margin: 12px 0 8px;
+  font-family: var(--font-heading), sans-serif;
+  font-size: 1.5rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: -0.02em;
+}
+
+.detail-summary {
+  border-left: 4px solid var(--blue-500);
+  padding: 10px 14px;
+  margin: 14px 0;
+  background: var(--bg-soft);
+}
+
+.summary-label {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.detail-verdict {
+  margin: 10px 0;
+  font-size: 0.95rem;
+}
+
+.verdict-label {
+  font-family: var(--font-mono), monospace;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  font-size: 0.75rem;
+  letter-spacing: 0.12em;
+}
+
+.confidence {
+  color: var(--text-muted);
+  font-size: 0.85rem;
+}
+
+.detail-meta {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 8px 18px;
+  margin: 16px 0;
+  font-size: 0.9rem;
+}
+
+.detail-meta strong {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.detail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.action-btn {
+  border: 3px solid var(--blue-500);
+  background: var(--panel);
+  color: var(--text-dark);
+  padding: 10px 16px;
+  font-family: var(--font-heading), sans-serif;
+  font-weight: 800;
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.action-btn:hover {
+  background: var(--blue-500);
+  color: var(--blue-950);
+}
+
+.action-btn.block { border-color: var(--blue-600); }
+.action-btn.isolate { border-color: var(--blue-500); }
+.action-btn.observe { border-color: var(--blue-400); }
+.action-btn.dismiss { border-color: var(--blue-700); color: var(--text-muted); }
+
+/* --- Audit log --- */
+.audit-log {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.audit-header,
+.audit-row {
+  display: grid;
+  grid-template-columns: 130px 1fr 160px 120px 200px;
+  gap: 12px;
+  align-items: center;
+  padding: 8px 12px;
+}
+
+.audit-header {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+  border-bottom: 3px solid var(--blue-700);
+}
+
+.audit-row {
+  background: var(--panel);
+  border: 2px solid var(--blue-800);
+  font-size: 0.88rem;
+}
+
+.audit-row:hover {
+  border-color: var(--blue-600);
+}
+
+.audit-type {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--blue-300);
+}
+
+.audit-type.type-enforcement { color: var(--blue-400); }
+.audit-type.type-observation { color: var(--text-muted); }
+
+.audit-action { font-weight: 700; }
+
+.audit-source {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.audit-verdict { font-size: 0.85rem; }
+
+.audit-time {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+
+.audit-rollback {
+  grid-column: 1 / -1;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.72rem;
+  color: var(--blue-300);
+  border-top: 2px dashed var(--blue-700);
+  padding-top: 4px;
+}
+
+/* --- Shared states --- */
+.loading-skeleton {
+  padding: 40px;
+  text-align: center;
+  font-family: var(--font-mono), monospace;
+  color: var(--text-muted);
+  border: 3px dashed var(--blue-700);
+}
+
+.error-banner {
+  padding: 16px 20px;
+  border: 3px solid var(--blue-600);
+  background: var(--panel);
+  color: var(--text-dark);
+  font-weight: 700;
+}
+
+.empty-state {
+  padding: 48px 24px;
+  text-align: center;
+  border: 3px dashed var(--blue-700);
+}
+
+.empty-title {
+  font-family: var(--font-heading), sans-serif;
+  font-size: 1.3rem;
+  font-weight: 900;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+
+.empty-message { color: var(--text-muted); }
+
+/* --- Rules list (detection rules explorer) --- */
+.rules-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 70vh;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.rule-info { display: flex; flex-direction: column; gap: 2px; }
+
+.rule-title {
+  font-weight: 800;
+  font-size: 0.95rem;
+}
+
+.rule-meta {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+/* --- Marketplace --- */
+.marketplace-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 18px;
+}
+
+.marketplace-card {
+  background: var(--panel);
+  border: 3px solid var(--blue-700);
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.marketplace-card:hover { border-color: var(--blue-500); }
+
+.mp-name {
+  font-family: var(--font-heading), sans-serif;
+  font-weight: 900;
+  font-size: 1.05rem;
+  text-transform: uppercase;
+}
+
+.mp-author { color: var(--blue-300); font-size: 0.85rem; }
+.mp-desc { color: var(--text-muted); font-size: 0.88rem; line-height: 1.5; }
+
+.mp-tags { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.mp-stats {
+  display: flex;
+  gap: 14px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.mp-download-btn {
+  align-self: flex-start;
+  border: 3px solid var(--blue-500);
+  background: var(--blue-500);
+  color: var(--blue-950);
+  padding: 8px 14px;
+  font-weight: 800;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+}
+
+.mp-download-btn:hover { background: var(--blue-400); border-color: var(--blue-400); }
+
+.mp-footer { border-top: 2px solid var(--blue-800); padding-top: 8px; }
+
+/* --- Packs --- */
+.pack-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+
+.pack-name { font-weight: 800; }
+
+.pack-meta {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.pack-tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 4px; }
+
+.pack-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.pack-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pack-message {
+  font-family: var(--font-mono), monospace;
+  font-size: 0.8rem;
+  color: var(--blue-300);
+}
+
+/* --- Utility classes referenced by components --- */
+.chip-row { display: flex; flex-wrap: wrap; gap: 6px; }
+
+.metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 10px;
+}
+
+.severity-icon { font-size: 0.8em; }
+
+.severity-label { letter-spacing: 0.12em; }
+
+.verdict-label { font-size: 0.75rem; }
+
+.tag {
+  display: inline-block;
+  border: 2px solid var(--blue-700);
+  padding: 2px 8px;
+  font-family: var(--font-mono), monospace;
+  font-size: 0.7rem;
+  color: var(--blue-300);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.subtle { color: var(--text-muted); }
+
+.tight { display: flex; flex-direction: column; gap: 4px; }
+
+.compact { padding: 8px 10px; }
+
+.static { color: var(--text-muted); }
+
+.content-grid {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(320px, 1.6fr);
+  gap: 20px;
+  align-items: start;
+}
+
+.empty { padding: 24px; color: var(--text-muted); }
+
+.confidence { margin-left: 6px; }
+
+/* --- Chat FAB: slimmer, never covers metric cards --- */
+.rules-fab {
+  position: fixed;
+  right: 22px;
+  bottom: 22px;
+  width: auto;
+  min-height: 0;
+  padding: 14px 22px;
+  border: 3px solid var(--blue-400);
+  background: var(--blue-600);
+  color: var(--blue-950);
+  font-family: var(--font-heading), sans-serif;
+  font-size: 0.95rem;
+  font-weight: 900;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  z-index: 45;
+  text-transform: uppercase;
+}
+
+/* ========================================================================
+   END QA hotfix block
+   ======================================================================== */
+
 .chip {
   display: inline-flex;
   align-items: center;
