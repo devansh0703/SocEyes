@@ -169,7 +169,7 @@ _capture_detect_cursor: int = 0  # Last processed event ID
 
 
 def _detect_from_capture_loop() -> None:
-    """Scan capture-agent events for suspicious patterns and generate alerts."""
+    """Scan capture-agent events for suspicious patterns and match against indexed rules."""
     from app_shared.unified_store import store_alert, store_event, query_events
     from app_shared.response_policy import choose_action, action_detail, render_command_preview
 
@@ -177,7 +177,7 @@ def _detect_from_capture_loop() -> None:
 
     while _CAPTURE_DETECT_RUNNING.is_set():
         try:
-            # Query recent capture-agent events we haven't processed yet
+            # Phase 1: Detect port scans from capture-agent events
             events = query_events(
                 sources=["capture-agent"],
                 start=None,
@@ -254,10 +254,233 @@ def _detect_from_capture_loop() -> None:
                         logger.info("Capture detection: port scan from %s (%d ports) -> alert CAPTURE-%s",
                                     src_ip, len(ports), technique_id)
 
+            # Phase 2: Match ALL recent events (capture + IDS alerts) against indexed rules
+            logger.debug("Starting rule matching cycle...")
+            _match_events_to_rules()
+            logger.debug("Rule matching cycle complete")
+
         except Exception as exc:
             logger.warning("Capture detection error: %s", exc)
 
         time.sleep(10)  # Scan every 10 seconds
+
+
+def _match_events_to_rules() -> None:
+    """Match recent IDS alerts against all indexed detection rules.
+
+    Queries alerts from suricata/wazuh/elastic (which carry technique_ids) and
+    matches them to detection rules via parent-technique resolution.
+    Sub-techniques like T1059.001 resolve to parent T1059 for rule matching.
+
+    This wires all 1764 indexed rules into live detection.
+    """
+    import sqlite3
+    import json
+    import os
+    from app_shared.unified_store import store_alert, store_event
+    from app_shared.response_policy import choose_action, action_detail, render_command_preview
+    from app_shared.state_paths import state_path
+
+    db_path = state_path("fda_events.sqlite")
+    if not db_path or not os.path.exists(db_path):
+        return
+
+    matched_rules: set[str] = set()
+    matched_alerts: set[str] = set()
+
+    # Query recent IDS alerts (suricata/wazuh/elastic) — these carry technique_ids
+    ids_alerts = query_events(
+        sources=["suricata", "wazuh", "elastic"],
+        start=None, end=None, limit=100, query="",
+    )
+    if not ids_alerts:
+        return
+
+    # Query capture-agent events for network context enrichment
+    capture_events = query_events(
+        sources=["capture-agent"],
+        start=None, end=None, limit=100, query="",
+    )
+    ip_ports: dict[str, set[int]] = {}
+    for ev in capture_events:
+        src = ev.get("source_ip", "") or ""
+        port = ev.get("destination_port") or 0
+        if src and src != "0.0.0.0" and port:
+            ip_ports.setdefault(src, set()).add(port)
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Pre-query: collect all matched rule rows per alert
+        alert_to_rules: dict[str, list[sqlite3.Row]] = {}
+        for alert in ids_alerts:
+            alert_id = alert.get("id", "")
+            if not alert_id or alert_id in matched_alerts:
+                continue
+
+            tech_raw = alert.get("technique_ids", "[]") or "[]"
+            try:
+                if isinstance(tech_raw, str):
+                    tech_ids = json.loads(tech_raw) if tech_raw else []
+                elif isinstance(tech_raw, list):
+                    tech_ids = tech_raw
+                else:
+                    tech_ids = []
+            except (json.JSONDecodeError, TypeError):
+                tech_ids = []
+            if not tech_ids:
+                continue
+
+            # DEBUG: log first alert's tech resolution
+            if len(alert_to_rules) == 0:
+                logger.warning("RULE_MATCH_DEBUG_ALERT: alert_id=%s, tech_raw=%s, parsed_techs=%s, type=%s",
+                               alert_id[:20], tech_raw, tech_ids, type(tech_raw).__name__)
+
+            # Resolve sub-techniques to parent techniques
+            parent_techs = set()
+            for t in tech_ids:
+                parent = t.split(".")[0] if "." in t else t
+                parent_techs.add(parent)
+
+            # DEBUG: log parent techs and rule query results
+            if len(alert_to_rules) == 0:
+                logger.warning("RULE_MATCH_DEBUG_PARENTS: parents=%s", parent_techs)
+
+            # Query rules for each parent technique
+            rule_rows = []
+            for parent in parent_techs:
+                cursor.execute(
+                    "SELECT rule_id, title, description, severity, technique_ids FROM rules WHERE technique_ids LIKE '%' || ? || '%' LIMIT 5",
+                    [parent],
+                )
+                fetched = cursor.fetchall()
+                rule_rows.extend(fetched)
+                if len(alert_to_rules) == 0:
+                    logger.warning("RULE_MATCH_DEBUG_QUERY: parent=%s, rows_returned=%d", parent, len(fetched))
+
+            alert_to_rules[alert_id] = rule_rows
+
+        conn.close()
+
+        # DEBUG: log what we found
+        logger.warning("RULE_MATCH_DEBUG: ids_alerts=%d, alert_to_rules=%d, capture_events=%d, sample_alert_id=%s, sample_tech=%s",
+                       len(ids_alerts), len(alert_to_rules), len(capture_events),
+                       (ids_alerts[0].get("id","")[:20] if ids_alerts else "none"),
+                       (ids_alerts[0].get("technique_ids","") if ids_alerts else "none"))
+
+        # DEBUG: trace first alert processing
+        if ids_alerts:
+            first = ids_alerts[0]
+            fid = first.get("id", "")
+            ftech = first.get("technique_ids", "[]")
+            logger.warning("RULE_MATCH_DEBUG_FIRST: alert_id=%s, tech_raw=%s, in_matched=%s",
+                           fid[:20], ftech, fid in matched_alerts)
+
+        # Process each alert with its matched rules
+        logger.warning("RULE_MATCH_DEBUG_PROCESSING_START: processing %d alerts, matched_alerts=%d, matched_rules=%d",
+                       len(ids_alerts), len(matched_alerts), len(matched_rules))
+        sample_id = ids_alerts[0].get("id", "") if ids_alerts else ""
+        logger.warning("RULE_MATCH_DEBUG_ALERTTORULES: sample_id=%s, entries=%d, first_entry_len=%d",
+                       sample_id[:20], len(alert_to_rules), len(alert_to_rules.get(sample_id, [])))
+        for alert in ids_alerts:
+            alert_id = alert.get("id", "")
+            if not alert_id or alert_id in matched_alerts:
+                continue
+            if alert_id not in alert_to_rules:
+                logger.warning("RULE_MATCH_SKIP: alert_id=%s not in alert_to_rules", alert_id[:20])
+                continue
+            if len(alert_to_rules[alert_id]) == 0:
+                logger.warning("RULE_MATCH_SKIP: alert_id=%s has empty rule list", alert_id[:20])
+                continue
+
+            tech_raw = alert.get("technique_ids", "[]") or "[]"
+            try:
+                tech_ids = json.loads(tech_raw) if tech_raw else []
+            except (json.JSONDecodeError, TypeError):
+                tech_ids = []
+            if not tech_ids:
+                continue
+
+            source_ip = alert.get("source_ip", "") or ""
+            dest_ip = alert.get("destination_ip", "") or ""
+            host_name = alert.get("host_name", "") or ""
+            ts = alert.get("timestamp", datetime.now(timezone.utc).isoformat())
+
+            port_count = len(ip_ports.get(source_ip, set()))
+            port_context = f" (scanning {port_count} ports)" if port_count > 5 else ""
+
+            logger.warning("RULE_MATCH_DEBUG_PROCESSING: alert_id=%s, rules=%d, source_ip=%s",
+                           alert_id[:20], len(alert_to_rules[alert_id]), source_ip)
+
+            logger.warning("RULE_MATCH_DEBUG_RULE_LOOP: about to process %d rules for alert %s (type=%s)",
+                           len(alert_to_rules[alert_id]) if alert_to_rules.get(alert_id) else 0,
+                           alert_id[:20],
+                           type(alert_to_rules.get(alert_id)).__name__)
+            for rule in (alert_to_rules.get(alert_id, []) or []):
+                logger.warning("RULE_MATCH_DEBUG_RULE: processing rule %s for alert %s",
+                               rule["rule_id"][:20], alert_id[:20])
+                rule_id_matched = rule["rule_id"]
+                if not rule_id_matched or rule_id_matched in matched_rules:
+                    continue
+                matched_rules.add(rule_id_matched)
+
+                tech_ids_rule = json.loads(rule["technique_ids"]) if rule["technique_ids"] else []
+                severity = rule["severity"] or "medium"
+                rule_title = rule["title"] or rule_id_matched
+                rule_desc = rule["description"] or ""
+
+                alert_title = f"{rule_title} (matched from IDS alert)"
+                alert_message = (
+                    f"Detection rule '{rule_id_matched}' matched IDS alert via technique {tech_ids[0]}. "
+                    f"Rule: {rule_desc[:200]}. "
+                    f"Source: {source_ip or 'unknown'}, Host: {host_name or 'unknown'}{port_context}. "
+                    f"Cross-matched against {len(matched_rules)} indexed detection rules."
+                )
+
+                store_event(
+                    "suricata", ".alerts-security.alerts-fda",
+                    engine="suricata",
+                    title=alert_title,
+                    message=alert_message,
+                    severity=severity,
+                    rule_id=rule_id_matched,
+                    source_ip=source_ip,
+                    destination_ip=dest_ip,
+                    host_name=host_name,
+                    technique_ids=tech_ids_rule,
+                    timestamp=ts,
+                )
+
+                action = choose_action(tech_ids_rule)
+                detail = action_detail(action)
+                preview = {
+                    "title": detail["title"],
+                    "summary": detail["summary"],
+                    "preview_command": render_command_preview(
+                        action,
+                        {"source_ip": source_ip, "destination_ip": dest_ip, "rule_id": rule_id_matched,
+                         "technique_id": tech_ids_rule[0] if tech_ids_rule else "", "host_name": host_name},
+                    ),
+                    "success_criteria": f"{source_ip or dest_ip or 'target'} is present in the runtime blocklist.",
+                }
+                store_alert(
+                    "correlated", severity, alert_title,
+                    message=alert_message,
+                    rule_id=rule_id_matched,
+                    source_ip=source_ip,
+                    destination_ip=dest_ip,
+                    technique_ids=tech_ids_rule,
+                    response_preview=preview,
+                    timestamp=ts,
+                )
+                matched_alerts.add(alert_id)
+                logger.info("Rule match: %s -> IDS from %s (rule %s, tech %s)",
+                            alert_title, source_ip or "unknown", rule_id_matched, tech_ids[0])
+
+    except Exception as exc:
+        logger.warning("Rule matching SQLite error: %s", exc)
 
 
 def start_capture_detection() -> None:
