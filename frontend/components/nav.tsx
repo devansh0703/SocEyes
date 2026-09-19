@@ -3,25 +3,25 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Bell, Bot, History, LayoutDashboard, PlaySquare, Radar, ScrollText, ShieldCheck, ShieldAlert, PackageOpen, Store } from "lucide-react";
+import { IconBell, IconBot, IconClipboardCheck, IconHistory, IconLayout, IconPlaySquare, IconRadar, IconScroll, IconShieldAlert, IconShieldCheck, IconPackage, IconStore } from "./icons";
 
 import { apiFetch } from "../lib/api";
 import { readCached, writeCached } from "../lib/client-cache";
 import { useGlobalViewState } from "../lib/view-state";
 
 const items = [
-  { href: "/", label: "Mission", icon: Radar },
-  { href: "/dashboard", label: "Command Center", icon: LayoutDashboard },
-  { href: "/logs", label: "Logs", icon: ScrollText },
-  { href: "/alerts", label: "Alerts", icon: Bell },
-  { href: "/incidents", label: "Incidents", icon: ShieldAlert },
-  { href: "/audit", label: "Audit", icon: ScrollText },
-  { href: "/packs", label: "Packs", icon: PackageOpen },
-  { href: "/marketplace", label: "Marketplace", icon: Store },
-  { href: "/runs", label: "Runs", icon: History },
-  { href: "/playbooks", label: "Playbooks", icon: PlaySquare },
-  { href: "/responses", label: "Responses", icon: ShieldCheck },
-  { href: "/agents", label: "Agents", icon: Bot },
+  { href: "/", label: "Mission", icon: IconRadar },
+  { href: "/dashboard", label: "Command Center", icon: IconLayout },
+  { href: "/logs", label: "Logs", icon: IconScroll },
+  { href: "/alerts", label: "Alerts", icon: IconBell },
+  { href: "/incidents", label: "Incidents", icon: IconShieldAlert },
+  { href: "/audit", label: "Audit", icon: IconClipboardCheck },
+  { href: "/packs", label: "Packs", icon: IconPackage },
+  { href: "/marketplace", label: "Marketplace", icon: IconStore },
+  { href: "/runs", label: "Runs", icon: IconHistory },
+  { href: "/playbooks", label: "Playbooks", icon: IconPlaySquare },
+  { href: "/responses", label: "Responses", icon: IconShieldCheck },
+  { href: "/agents", label: "Agents", icon: IconBot },
 ];
 
 type RunState = {

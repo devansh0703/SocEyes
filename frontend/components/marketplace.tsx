@@ -12,8 +12,6 @@ type MarketplacePack = {
   tags: string[];
   author: string;
   version: string;
-  downloads: number;
-  rating: number;
 };
 
 export function MarketplaceView() {
@@ -42,7 +40,7 @@ export function MarketplaceView() {
     setDownloading(packId);
     try {
       const res = await fetch(`/api/marketplace/packs/${packId}/download`);
-      if (!res.ok) throw new Error("Download failed");
+      if (!res.ok) throw new Error(`Download failed: ${res.status}`);
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
       const a = document.createElement("a");
@@ -85,13 +83,13 @@ export function MarketplaceView() {
             <div className="mp-tags">{pack.tags.map((t) => <span key={t} className="tag">{t}</span>)}</div>
             <div className="mp-footer">
               <span className="mp-author">by {pack.author}</span>
-              <span className="mp-stats">{pack.downloads} downloads · {pack.rating}/5</span>
+              <span className="mp-stats">v{pack.version}</span>
               <button
                 className="mp-download-btn"
                 onClick={() => handleDownload(pack.id)}
                 disabled={downloading === pack.id}
               >
-                {downloading === pack.id ? "Downloading…" : "Download"}
+                {downloading === pack.id ? "Packaging…" : "Download"}
               </button>
             </div>
           </div>

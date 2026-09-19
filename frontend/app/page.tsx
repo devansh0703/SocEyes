@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Shield, Siren, Workflow } from "lucide-react";
+import { IconSiren, IconShield, IconWorkflow } from "../components/icons";
 
 import { apiFetch } from "../lib/api";
 import { readCached, writeCached } from "../lib/client-cache";
@@ -135,21 +135,21 @@ export default function LandingPage() {
 
       <section className="panel feature-strip">
           <div className="feature-box">
-            <Shield size={20} />
+            <IconShield size={20} />
             <div>
               <h3>Auto-start full-spectrum launch</h3>
               <p>On open, the session starts automatically and seeds core attack scenario classes plus low/medium/high/critical response executions for immediate graph population.</p>
             </div>
           </div>
         <div className="feature-box">
-          <Workflow size={20} />
+          <IconWorkflow size={20} />
           <div>
             <h3>Mapped playbooks + response chain</h3>
             <p>Generated signals include MITRE IDs that map through playbooks, response preview, and runtime control updates in one continuous flow.</p>
           </div>
         </div>
         <div className="feature-box">
-          <Siren size={20} />
+          <IconSiren size={20} />
           <div>
             <h3>Critical containment visibility</h3>
             <p>Critical responses spin up honeypot containers and expose session/log artifacts directly in the Response Center for operator confirmation.</p>

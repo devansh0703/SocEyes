@@ -2,7 +2,6 @@
    FDA Cyber Control — Tech Brutalist Design System
    Blue-only palette: white text on dark, black text on light.
    ======================================================================== */
-
 /* --- Fonts --- */
 :root {
   --font-body: "Nunito Sans", sans-serif;
@@ -47,7 +46,6 @@
   --accent-alt: var(--blue-400);
   --accent-gold: var(--blue-300);
   --accent-rose: var(--blue-50);
-  --accent-violet: var(--blue-200);
   --shadow: 0 0 0 0px transparent;
 }
 
@@ -1554,6 +1552,7 @@ select {
   }
 }
 
+
 @media (max-width: 720px) {
   .dashboard-grid,
   .stat-grid,
@@ -1585,6 +1584,228 @@ select {
     grid-template-columns: 1fr;
   }
   .rules-drawer-controls {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ========================================================================
+   Premium refinement pass
+   Keeps the brutalist identity: hard edges, thick strokes, blue-only.
+   Fixes execution gaps: hero hierarchy, nested-card borders, focus
+   states, scrollbar rhythm, table polish, selection color, reduced
+   motion, and print quality.
+   ======================================================================== */
+
+/* --- Hero: real typographic hierarchy --- */
+.hero-copy h1 {
+  margin: 12px 0 14px;
+  font-size: clamp(1.7rem, 3.2vw, 2.6rem);
+  font-weight: 900;
+  line-height: 1.06;
+  text-transform: uppercase;
+  text-wrap: balance;
+}
+
+.hero-copy > p {
+  max-width: 56ch;
+}
+
+/* Metrics column flows in two columns so the hero has no dead space */
+.hero-panel.hero-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+
+.hero-panel.hero-metrics .metric-card {
+  padding: 14px 16px;
+}
+
+.hero-panel.hero-metrics .metric-card strong {
+  font-size: 1.5rem;
+}
+
+.hero-panel.hero-metrics .metric-card small {
+  display: block;
+  margin-top: 4px;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  color: var(--text-muted);
+}
+
+@media (max-width: 1100px) {
+  .hero-panel.hero-metrics {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 720px) {
+  .hero-panel.hero-metrics {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* --- Nested cards: inner detail-card sits flat inside the hero panel --- */
+.hero-copy .detail-card {
+  margin-top: 18px;
+  border-width: 2px;
+  border-color: var(--blue-700);
+  background: var(--bg-soft);
+  padding: 14px 16px;
+}
+
+.hero-copy .detail-card h3 {
+  font-size: 0.8rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-muted);
+}
+
+.hero-copy .detail-card p {
+  margin-top: 6px;
+  font-family: var(--font-heading), sans-serif;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: var(--text-dark);
+}
+
+/* --- Focus states: keyboard operators get a real ring --- */
+:focus-visible {
+  outline: 2px solid var(--blue-400);
+  outline-offset: 2px;
+}
+
+.sidebar-link:focus-visible,
+.btn:focus-visible,
+.button:focus-visible {
+  outline: 2px solid var(--blue-300);
+  outline-offset: -6px;
+}
+
+/* --- Selection --- */
+::selection {
+  background: var(--blue-500);
+  color: var(--blue-950);
+}
+
+/* --- Scrollbars: quiet, structural --- */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--blue-600) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: var(--blue-950);
+}
+
+*::-webkit-scrollbar-thumb {
+  background: var(--blue-700);
+  border: 2px solid var(--blue-950);
+}
+
+*::-webkit-scrollbar-thumb:hover {
+  background: var(--blue-600);
+}
+
+/* --- Tables: readable rhythm --- */
+.data-table th {
+  position: sticky;
+  top: 0;
+  background: var(--panel-soft);
+  border-bottom: 3px solid var(--blue-600);
+  text-align: left;
+  padding: 10px 12px;
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+
+.data-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--blue-700);
+  vertical-align: top;
+}
+
+.data-table tbody tr:hover {
+  background: var(--bg-soft);
+}
+
+/* --- Buttons: consistent heights, full-width on tiny screens --- */
+.btn,
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  transition: background 120ms linear, color 120ms linear, border-color 120ms linear;
+}
+
+.btn:active,
+.button:active {
+  transform: translateY(1px);
+}
+
+@media (max-width: 560px) {
+  .hero-actions .button {
+    width: 100%;
+  }
+}
+
+/* --- Sidebar: active link is structural, not a fill swap --- */
+.sidebar-link {
+  position: relative;
+}
+
+.sidebar-link.active::before {
+  content: "";
+  position: absolute;
+  left: -22px;
+  top: 0;
+  bottom: 0;
+  width: 4px;
+  background: var(--blue-400);
+}
+
+/* --- Mono numerals: metrics read as instrument gauges --- */
+.stat-tile strong,
+.metric-card strong,
+.mini-stat strong {
+  font-variant-numeric: tabular-nums;
+}
+
+/* --- Reduced motion: respect the operator --- */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  html {
+    scroll-behavior: auto;
+  }
+}
+
+/* --- Print: an operator can file a report --- */
+@media print {
+  .sidebar,
+  .rules-fab,
+  .footer-bar {
+    display: none !important;
+  }
+  body {
+    background: #fff;
+    color: #000;
+  }
+  .app-shell {
     grid-template-columns: 1fr;
   }
 }
