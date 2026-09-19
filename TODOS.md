@@ -27,9 +27,27 @@
 - [x] Detection pack editor in frontend — `frontend/app/packs/` + `/api/packs` endpoints
 - [x] Community rule marketplace — `frontend/app/marketplace/` + `/api/marketplace/packs` endpoint
 
+## P4 (QA 2026-09-20) — ALL COMPLETE
+
+- [x] Dashboard latency fix (cache + stale-while-revalidate + warmup) — `backend/app/main.py` `_build_dashboard`
+- [x] Per-route static page serving (was serving dashboard shell everywhere) — `serve_spa`
+- [x] FRONTEND_DIST defaults to frontend/out static export — `_default_frontend_dist`
+- [x] API payload contracts fixed (agents/live, responses/audit, analytics aggregates) — main.py, unified_store.py
+- [x] Capture index added to source map (dashboard showed 0 events) — unified_store.py
+- [x] Trailing-slash API normalization middleware — main.py
+- [x] CSS for 68 unstyled component classes + chat FAB resize — frontend/app/globals.css
+
+## P5 (Deferred from QA 2026-09-20)
+
+- [ ] React #418 hydration mismatch on all pages (static export + runtime data; needs frontend source fix + rebuild)
+- [ ] WAL file 971MB, never checkpoints while server runs (ops: restart window + `PRAGMA wal_checkpoint(TRUNCATE)`)
+- [ ] Stale test: tests/test_response_policy.py::test_defaults_are_safe asserts auto_execute False, but auto-response (commit f7c7873) intentionally sets True — update the test to match the product decision
+- [ ] fda CLI python_bin() falls back to .venv-tools (no uvicorn) when .venv-fda is missing — prefer system python3 in fallback order
+
 ## Verification
 
 - 48 Python tests passing
 - Go agent compiles and captures real ICMP traffic (verified with sudo)
 - nftables enforcement verified with sudo (block_source_ip, isolate_host)
 - All commits on master branch
+- QA 2026-09-20: 10 issues found, 10 fixed, health 31 -> 84 (report: .gstack/qa-reports/qa-report-fda-cyber-control-2026-09-20.md)
