@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { IconSiren, IconShield, IconWorkflow } from "../components/icons";
 
 import { apiFetch } from "../lib/api";
-import { readCached, writeCached } from "../lib/client-cache";
+import { useCachedState, writeCached } from "../lib/client-cache";
 
 type DashboardPayload = {
   rules_total: number;
@@ -38,9 +38,9 @@ type RunHistoryPayload = {
 };
 
 export default function LandingPage() {
-  const [dashboard, setDashboard] = useState<DashboardPayload | null>(() => readCached<DashboardPayload>("fda-cache:landing-dashboard"));
-  const [honeypots, setHoneypots] = useState<HoneypotPayload>(() => readCached<HoneypotPayload>("fda-cache:landing-honeypots") || { items: [] });
-  const [runs, setRuns] = useState<RunHistoryPayload>(() => readCached<RunHistoryPayload>("fda-cache:landing-runs") || { items: [] });
+  const [dashboard, setDashboard] = useCachedState<DashboardPayload | null>("fda-cache:landing-dashboard", null);
+  const [honeypots, setHoneypots] = useCachedState<HoneypotPayload>("fda-cache:landing-honeypots", { items: [] });
+  const [runs, setRuns] = useCachedState<RunHistoryPayload>("fda-cache:landing-runs", { items: [] });
 
   useEffect(() => {
     let active = true;

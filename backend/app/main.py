@@ -11,7 +11,6 @@ import asyncio
 import json
 import logging
 import os
-import random
 import sys
 import threading
 import time
@@ -22,18 +21,17 @@ from uuid import uuid4
 import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
-from starlette.concurrency import run_in_threadpool
+from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
 
 # ---------------------------------------------------------------------------
 # Path setup
 # ---------------------------------------------------------------------------
-_ROOT = Path(__file__).resolve().parent.parent.parent  # fda/
+from backend.app.paths import _ROOT
 
 from app_shared.unified_store import (
     get_analytics_summary, get_latest_alerts, init_db,
     prune_events, query_events, search_alerts, search_rules,
-    store_alert, store_event, get_kv, set_kv,
+    get_kv, set_kv,
     start_run, stop_run, current_run, save_run, run_history,
     find_rule, index_rule, es_available,
 )
@@ -41,12 +39,26 @@ from app_shared.response_policy import (
     choose_action, action_detail, render_command_preview,
     load_policy, save_policy,
 )
-from app_shared.text_utils import now_utc, clean_text
+from app_shared.text_utils import now_utc
 from app_shared.retention import read_retention_hours
 from app_shared.state_paths import read_json, read_jsonl, state_path
-from backend.app.standalone import _sim_running  # legacy health-contract flag; always unset in the server
-# NOTE: attack simulation lives in backend.app.standalone but is TEST-ONLY —
-# nothing in the server imports or calls it.
+from backend.app.runtime_controls import (
+    check_and_count_rate_limit,
+    client_ip_from_request,
+    enforcement_response,
+    is_blocked_ip,
+)
+from backend.app.services.dashboard import DashboardService
+from backend.app.services.event_receiver import (
+    event_queue_size,
+    ingest_event,
+    start_event_receiver,
+    start_prune_loop,
+    stop_event_receiver,
+    stop_prune_loop,
+)
+from backend.app.services.capture_detection import start_capture_detection, stop_capture_detection
+from backend.app.services.seed_rules import seed_rules
 
 # ---------------------------------------------------------------------------
 # Config
@@ -68,448 +80,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message
 logger = logging.getLogger("fda.api")
 
 # ---------------------------------------------------------------------------
-# Background threads
+# Orchestration engine state (the real ZeroClaw engine). Event receiver,
+# retention and capture-detection threads live in backend/app/services/.
 # ---------------------------------------------------------------------------
-# Replaced by _event_receiver_running and _event_receiver_thread above
-_prune_thread: threading.Thread | None = None
-_prune_running = threading.Event()
-
-# Orchestration engine state (the real ZeroClaw engine)
 _orch_engine_running = False
 _zeroclaw_thread: threading.Thread | None = None
-_zeroclaw_running = threading.Event()
 
 # Ensure log directory exists
 _log_dir = _ROOT / "state" / "logs"
 _log_dir.mkdir(parents=True, exist_ok=True)
-
-
-# ---------------------------------------------------------------------------
-# Real Event Receiver (replaces attack simulator)
-# ---------------------------------------------------------------------------
-from typing import Any
-_event_queue: list[dict[str, Any]] = []
-_event_queue_lock = threading.Lock()
-_event_receiver_thread: threading.Thread | None = None
-_event_receiver_running = threading.Event()
-
-
-def _event_receiver_loop():
-    """Background thread: drain event queue and store + publish to ZeroClaw."""
-    while _event_receiver_running.is_set():
-        with _event_queue_lock:
-            batch = list(_event_queue)
-            _event_queue.clear()
-
-        if batch:
-            try:
-                # Store events in SQLite
-                from app_shared.unified_store import store_events_batch
-                store_events_batch(batch)
-
-                # Publish to ZeroClaw runtime event bus
-                from backend.app.core.orchestrator import publish_event_all
-                for ev in batch:
-                    publish_event_all(ev)
-            except Exception as exc:
-                logger.warning("Event receiver error: %s", exc)
-
-        time.sleep(0.5)
-
-
-def start_event_receiver():
-    global _event_receiver_thread
-    if _event_receiver_thread and _event_receiver_thread.is_alive():
-        return
-    _event_receiver_running.set()
-    _event_receiver_thread = threading.Thread(target=_event_receiver_loop, daemon=True, name="event-receiver")
-    _event_receiver_thread.start()
-    logger.info("Event receiver started (Go agent -> HTTP -> SQLite)")
-
-
-def stop_event_receiver():
-    _event_receiver_running.clear()
-    if _event_receiver_thread:
-        _event_receiver_thread.join(timeout=5)
-    logger.info("Event receiver stopped")
-
-
-def ingest_event(event: dict[str, Any]) -> dict[str, Any]:
-    """Ingest a single event from the Go agent (called by HTTP endpoint)."""
-    run_id = _current_run_id()
-    event["run_id"] = run_id
-    event["timestamp"] = event.get("timestamp") or now_utc()
-
-    with _event_queue_lock:
-        _event_queue.append(event)
-
-    return {"status": "ok", "queued": True}
-
-
-def _prune_loop():
-    while _prune_running.is_set():
-        try:
-            hours = int(os.environ.get("RETENTION_HOURS", "24"))
-            prune_events(hours)
-        except Exception as exc:
-            logger.warning("Prune error: %s", exc)
-        time.sleep(3600)
-
-
-def start_prune_loop():
-    global _prune_thread
-    _prune_running.set()
-    _prune_thread = threading.Thread(target=_prune_loop, daemon=True)
-    _prune_thread.start()
-    logger.info("Retention prune loop started (hourly)")
-
-
-def stop_prune_loop():
-    _prune_running.clear()
-    logger.info("Retention prune loop stopped")
-
-
-# ---------------------------------------------------------------------------
-# Real-time capture event detection (generates alerts from captured packets)
-# ---------------------------------------------------------------------------
-
-_CAPTURE_DETECT_RUNNING = threading.Event()
-_capture_detect_thread: threading.Thread | None = None
-_capture_detect_cursor: int = 0  # Last processed event ID
-
-
-def _detect_from_capture_loop() -> None:
-    """Scan capture-agent events for suspicious patterns and match against indexed rules."""
-    from app_shared.unified_store import store_alert, store_event, query_events
-    from app_shared.response_policy import choose_action, action_detail, render_command_preview
-
-    logger.info("Capture detection loop started")
-
-    while _CAPTURE_DETECT_RUNNING.is_set():
-        try:
-            # Phase 1: Detect port scans from capture-agent events
-            events = query_events(
-                sources=["capture-agent"],
-                start=None,
-                end=None,
-                limit=500,
-            )
-
-            if events:
-                # Group by source IP to detect port scan patterns
-                ip_port_map: dict[str, set[int]] = {}
-                ip_event_count: dict[str, int] = {}
-
-                for ev in events:
-                    src_ip = ev.get("source_ip", "")
-                    if not src_ip or src_ip == "0.0.0.0":
-                        continue
-                    port = ev.get("destination_port") or 0
-                    ip_port_map.setdefault(src_ip, set()).add(port)
-                    ip_event_count[src_ip] = ip_event_count.get(src_ip, 0) + 1
-
-                # Detect port scans: many distinct ports from one IP
-                for src_ip, ports in ip_port_map.items():
-                    if len(ports) >= 20:  # 20+ distinct ports = port scan
-                        severity = "medium" if len(ports) < 50 else "high"
-                        title = f"Port scan reconnaissance (T1046)"
-                        technique_id = "T1046"
-                        tech = [technique_id]
-                        ts = datetime.now(timezone.utc).isoformat()
-
-                        # Store as events (for ES indexing)
-                        store_event(
-                            "suricata", "fda-capture-detection",
-                            engine="suricata",
-                            title=title,
-                            message=f"Detected {len(ports)} distinct ports scanned from {src_ip} across {ip_event_count[src_ip]} capture events. Real detection from Go agent packet capture.",
-                            severity=severity,
-                            rule_id=f"CAPTURE-{technique_id}",
-                            source_ip=src_ip,
-                            technique_ids=tech,
-                            timestamp=ts,
-                        )
-                        store_event(
-                            "elastic", ".alerts-security.alerts-fda",
-                            engine="elastic",
-                            title=title,
-                            message=f"Detected {len(ports)} distinct ports scanned from {src_ip} across {ip_event_count[src_ip]} capture events. Real detection from Go agent packet capture.",
-                            severity=severity,
-                            rule_id=f"CAPTURE-{technique_id}",
-                            source_ip=src_ip,
-                            technique_ids=tech,
-                            timestamp=ts,
-                        )
-
-                        # Store as correlated alert
-                        action = choose_action(tech)
-                        detail = action_detail(action)
-                        preview = {
-                            "title": detail["title"],
-                            "summary": detail["summary"],
-                            "preview_command": render_command_preview(
-                                action, {"source_ip": src_ip, "rule_id": f"CAPTURE-{technique_id}", "technique_id": technique_id}
-                            ),
-                            "success_criteria": f"{src_ip} is present in the runtime blocklist.",
-                        }
-                        store_alert(
-                            "correlated", severity, title,
-                            message=f"{title} — Detected by real-time capture analysis from Go agent packets.",
-                            rule_id=f"CAPTURE-{technique_id}",
-                            source_ip=src_ip,
-                            technique_ids=tech,
-                            response_preview=preview,
-                            timestamp=ts,
-                        )
-                        logger.info("Capture detection: port scan from %s (%d ports) -> alert CAPTURE-%s",
-                                    src_ip, len(ports), technique_id)
-
-            # Phase 2: Match ALL recent events (capture + IDS alerts) against indexed rules
-            logger.debug("Starting rule matching cycle...")
-            _match_events_to_rules()
-            logger.debug("Rule matching cycle complete")
-
-        except Exception as exc:
-            logger.warning("Capture detection error: %s", exc)
-
-        time.sleep(10)  # Scan every 10 seconds
-
-
-def _match_events_to_rules() -> None:
-    """Match recent IDS alerts against all indexed detection rules.
-
-    Queries alerts from suricata/wazuh/elastic (which carry technique_ids) and
-    matches them to detection rules via parent-technique resolution.
-    Sub-techniques like T1059.001 resolve to parent T1059 for rule matching.
-
-    This wires all 1764 indexed rules into live detection.
-    """
-    import sqlite3
-    import json
-    import os
-    from app_shared.unified_store import store_alert, store_event
-    from app_shared.response_policy import choose_action, action_detail, render_command_preview
-    from app_shared.state_paths import state_path
-
-    db_path = state_path("fda_events.sqlite")
-    if not db_path or not os.path.exists(db_path):
-        return
-
-    matched_rules: set[str] = set()
-    matched_alerts: set[str] = set()
-
-    # Query recent IDS alerts (suricata/wazuh/elastic) — these carry technique_ids
-    ids_alerts = query_events(
-        sources=["suricata", "wazuh", "elastic"],
-        start=None, end=None, limit=100, query="",
-    )
-    if not ids_alerts:
-        return
-
-    # Query capture-agent events for network context enrichment
-    capture_events = query_events(
-        sources=["capture-agent"],
-        start=None, end=None, limit=100, query="",
-    )
-    ip_ports: dict[str, set[int]] = {}
-    for ev in capture_events:
-        src = ev.get("source_ip", "") or ""
-        port = ev.get("destination_port") or 0
-        if src and src != "0.0.0.0" and port:
-            ip_ports.setdefault(src, set()).add(port)
-
-    try:
-        conn = sqlite3.connect(db_path)
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        # Pre-query: collect all matched rule rows per alert
-        alert_to_rules: dict[str, list[sqlite3.Row]] = {}
-        for alert in ids_alerts:
-            alert_id = alert.get("id", "")
-            if not alert_id or alert_id in matched_alerts:
-                continue
-
-            tech_raw = alert.get("technique_ids", "[]") or "[]"
-            try:
-                if isinstance(tech_raw, str):
-                    tech_ids = json.loads(tech_raw) if tech_raw else []
-                elif isinstance(tech_raw, list):
-                    tech_ids = tech_raw
-                else:
-                    tech_ids = []
-            except (json.JSONDecodeError, TypeError):
-                tech_ids = []
-            if not tech_ids:
-                continue
-
-            # DEBUG: log first alert's tech resolution
-            if len(alert_to_rules) == 0:
-                logger.warning("RULE_MATCH_DEBUG_ALERT: alert_id=%s, tech_raw=%s, parsed_techs=%s, type=%s",
-                               alert_id[:20], tech_raw, tech_ids, type(tech_raw).__name__)
-
-            # Resolve sub-techniques to parent techniques
-            parent_techs = set()
-            for t in tech_ids:
-                parent = t.split(".")[0] if "." in t else t
-                parent_techs.add(parent)
-
-            # DEBUG: log parent techs and rule query results
-            if len(alert_to_rules) == 0:
-                logger.warning("RULE_MATCH_DEBUG_PARENTS: parents=%s", parent_techs)
-
-            # Query rules for each parent technique
-            rule_rows = []
-            for parent in parent_techs:
-                cursor.execute(
-                    "SELECT rule_id, title, description, severity, technique_ids FROM rules WHERE technique_ids LIKE '%' || ? || '%' LIMIT 5",
-                    [parent],
-                )
-                fetched = cursor.fetchall()
-                rule_rows.extend(fetched)
-                if len(alert_to_rules) == 0:
-                    logger.warning("RULE_MATCH_DEBUG_QUERY: parent=%s, rows_returned=%d", parent, len(fetched))
-
-            alert_to_rules[alert_id] = rule_rows
-
-        conn.close()
-
-        # DEBUG: log what we found
-        logger.warning("RULE_MATCH_DEBUG: ids_alerts=%d, alert_to_rules=%d, capture_events=%d, sample_alert_id=%s, sample_tech=%s",
-                       len(ids_alerts), len(alert_to_rules), len(capture_events),
-                       (ids_alerts[0].get("id","")[:20] if ids_alerts else "none"),
-                       (ids_alerts[0].get("technique_ids","") if ids_alerts else "none"))
-
-        # DEBUG: trace first alert processing
-        if ids_alerts:
-            first = ids_alerts[0]
-            fid = first.get("id", "")
-            ftech = first.get("technique_ids", "[]")
-            logger.warning("RULE_MATCH_DEBUG_FIRST: alert_id=%s, tech_raw=%s, in_matched=%s",
-                           fid[:20], ftech, fid in matched_alerts)
-
-        # Process each alert with its matched rules
-        logger.warning("RULE_MATCH_DEBUG_PROCESSING_START: processing %d alerts, matched_alerts=%d, matched_rules=%d",
-                       len(ids_alerts), len(matched_alerts), len(matched_rules))
-        sample_id = ids_alerts[0].get("id", "") if ids_alerts else ""
-        logger.warning("RULE_MATCH_DEBUG_ALERTTORULES: sample_id=%s, entries=%d, first_entry_len=%d",
-                       sample_id[:20], len(alert_to_rules), len(alert_to_rules.get(sample_id, [])))
-        for alert in ids_alerts:
-            alert_id = alert.get("id", "")
-            if not alert_id or alert_id in matched_alerts:
-                continue
-            if alert_id not in alert_to_rules:
-                logger.warning("RULE_MATCH_SKIP: alert_id=%s not in alert_to_rules", alert_id[:20])
-                continue
-            if len(alert_to_rules[alert_id]) == 0:
-                logger.warning("RULE_MATCH_SKIP: alert_id=%s has empty rule list", alert_id[:20])
-                continue
-
-            tech_raw = alert.get("technique_ids", "[]") or "[]"
-            try:
-                tech_ids = json.loads(tech_raw) if tech_raw else []
-            except (json.JSONDecodeError, TypeError):
-                tech_ids = []
-            if not tech_ids:
-                continue
-
-            source_ip = alert.get("source_ip", "") or ""
-            dest_ip = alert.get("destination_ip", "") or ""
-            host_name = alert.get("host_name", "") or ""
-            ts = alert.get("timestamp", datetime.now(timezone.utc).isoformat())
-
-            port_count = len(ip_ports.get(source_ip, set()))
-            port_context = f" (scanning {port_count} ports)" if port_count > 5 else ""
-
-            logger.warning("RULE_MATCH_DEBUG_PROCESSING: alert_id=%s, rules=%d, source_ip=%s",
-                           alert_id[:20], len(alert_to_rules[alert_id]), source_ip)
-
-            logger.warning("RULE_MATCH_DEBUG_RULE_LOOP: about to process %d rules for alert %s (type=%s)",
-                           len(alert_to_rules[alert_id]) if alert_to_rules.get(alert_id) else 0,
-                           alert_id[:20],
-                           type(alert_to_rules.get(alert_id)).__name__)
-            for rule in (alert_to_rules.get(alert_id, []) or []):
-                logger.warning("RULE_MATCH_DEBUG_RULE: processing rule %s for alert %s",
-                               rule["rule_id"][:20], alert_id[:20])
-                rule_id_matched = rule["rule_id"]
-                if not rule_id_matched or rule_id_matched in matched_rules:
-                    continue
-                matched_rules.add(rule_id_matched)
-
-                tech_ids_rule = json.loads(rule["technique_ids"]) if rule["technique_ids"] else []
-                severity = rule["severity"] or "medium"
-                rule_title = rule["title"] or rule_id_matched
-                rule_desc = rule["description"] or ""
-
-                alert_title = f"{rule_title} (matched from IDS alert)"
-                alert_message = (
-                    f"Detection rule '{rule_id_matched}' matched IDS alert via technique {tech_ids[0]}. "
-                    f"Rule: {rule_desc[:200]}. "
-                    f"Source: {source_ip or 'unknown'}, Host: {host_name or 'unknown'}{port_context}. "
-                    f"Cross-matched against {len(matched_rules)} indexed detection rules."
-                )
-
-                store_event(
-                    "suricata", ".alerts-security.alerts-fda",
-                    engine="suricata",
-                    title=alert_title,
-                    message=alert_message,
-                    severity=severity,
-                    rule_id=rule_id_matched,
-                    source_ip=source_ip,
-                    destination_ip=dest_ip,
-                    host_name=host_name,
-                    technique_ids=tech_ids_rule,
-                    timestamp=ts,
-                )
-
-                action = choose_action(tech_ids_rule)
-                detail = action_detail(action)
-                preview = {
-                    "title": detail["title"],
-                    "summary": detail["summary"],
-                    "preview_command": render_command_preview(
-                        action,
-                        {"source_ip": source_ip, "destination_ip": dest_ip, "rule_id": rule_id_matched,
-                         "technique_id": tech_ids_rule[0] if tech_ids_rule else "", "host_name": host_name},
-                    ),
-                    "success_criteria": f"{source_ip or dest_ip or 'target'} is present in the runtime blocklist.",
-                }
-                store_alert(
-                    "correlated", severity, alert_title,
-                    message=alert_message,
-                    rule_id=rule_id_matched,
-                    source_ip=source_ip,
-                    destination_ip=dest_ip,
-                    technique_ids=tech_ids_rule,
-                    response_preview=preview,
-                    timestamp=ts,
-                )
-                matched_alerts.add(alert_id)
-                logger.info("Rule match: %s -> IDS from %s (rule %s, tech %s)",
-                            alert_title, source_ip or "unknown", rule_id_matched, tech_ids[0])
-
-    except Exception as exc:
-        logger.warning("Rule matching SQLite error: %s", exc)
-
-
-def start_capture_detection() -> None:
-    """Start the capture event detection loop."""
-    global _capture_detect_thread
-    if _capture_detect_thread and _capture_detect_thread.is_alive():
-        return
-    _CAPTURE_DETECT_RUNNING.set()
-    _capture_detect_thread = threading.Thread(
-        target=_detect_from_capture_loop, daemon=True, name="capture-detection"
-    )
-    _capture_detect_thread.start()
-    logger.info("Capture detection loop started (scanning for port scans, brute force)")
-
-
-def stop_capture_detection() -> None:
-    """Stop the capture event detection loop."""
-    _CAPTURE_DETECT_RUNNING.clear()
-    logger.info("Capture detection loop stopped")
 
 
 # ---------------------------------------------------------------------------
@@ -552,102 +131,6 @@ def stop_zeroclaw():
     global _orch_engine_running
     _orch_engine_running = False
     logger.info("Orchestration engine stopped")
-
-
-# ---------------------------------------------------------------------------
-# Seed rules
-# ---------------------------------------------------------------------------
-def _seed_rules():
-    """Index available Sigma + Elastic detection rules."""
-    try:
-        import yaml
-    except ImportError:
-        return
-    try:
-        import tomllib
-    except ImportError:
-        try:
-            import tomli as tomllib
-        except ImportError:
-            tomllib = None
-
-    sigma_dir = _ROOT / "sigma" / "rules"
-    if sigma_dir.exists():
-        for yml in sigma_dir.rglob("*.yml"):
-            try:
-                data = yaml.safe_load(yml.read_text())
-                if isinstance(data, dict) and data.get("id"):
-                    index_rule({
-                        "rule_id": data["id"], "engine": "sigma",
-                        "title": data.get("title", ""),
-                        "description": data.get("description", ""),
-                        "severity": data.get("level", "medium"),
-                        "technique_ids": [], "mitre_ids": [],
-                        "file_path": str(yml), "raw": data,
-                    })
-            except Exception:
-                pass
-
-    # 3. Panther rules (panther-analysis/{rules,correlation_rules,policies}/**/*.yml)
-    #    Panther uses PascalCase keys (RuleID, Severity, Tags) — different schema from Sigma.
-    panther_root = _ROOT / "panther-analysis"
-    if panther_root.exists():
-        panther_dirs = ["rules", "correlation_rules", "policies"]
-        panther_count = 0
-        for sub in panther_dirs:
-            subdir = panther_root / sub
-            if not subdir.exists():
-                continue
-            for yml in subdir.rglob("*.yml"):
-                try:
-                    data = yaml.safe_load(yml.read_text())
-                    if not isinstance(data, dict):
-                        continue
-                    # Policy/Rule docs carry AnalysisType: Rule|Policy; correlation rules
-                    # use Detection without a RuleID — key those by file stem.
-                    rule_id = data.get("RuleID") or data.get("PolicyID") or (data.get("AnalysisType") and yml.stem)
-                    if not rule_id:
-                        continue
-                    tags = [str(t) for t in data.get("Tags", [])]
-                    mitre_ids = sorted({str(t).split(".")[0] for t in tags if t.upper().startswith("T") and any(c.isdigit() for c in t[:6])})
-                    index_rule({
-                        "rule_id": f"panther-{rule_id}", "engine": "panther",
-                        "title": data.get("DisplayName") or str(rule_id),
-                        "description": data.get("Description") or data.get("Summary") or "",
-                        "severity": str(data.get("Severity") or "medium").lower(),
-                        "technique_ids": mitre_ids, "mitre_ids": mitre_ids,
-                        "file_path": str(yml), "raw": data,
-                    })
-                    panther_count += 1
-                except Exception:
-                    pass
-        if panther_count:
-            logger.info("Indexed %d Panther rules", panther_count)
-
-    det_dir = _ROOT / "detection-rules" / "rules"
-    if det_dir.exists() and tomllib:
-        for toml_file in det_dir.rglob("*.toml"):
-            try:
-                with open(toml_file, "rb") as f:
-                    data = tomllib.load(f)
-                rule = data.get("rule", {})
-                rule_id = rule.get("rule_id") or rule.get("id")
-                if rule_id:
-                    technique_ids = []
-                    for threat in rule.get("threat", []):
-                        for tech in threat.get("technique", []):
-                            if tech.get("id"):
-                                technique_ids.append(tech["id"])
-                    index_rule({
-                        "rule_id": rule_id, "engine": "elastic",
-                        "title": rule.get("name", ""),
-                        "description": rule.get("description", ""),
-                        "severity": rule.get("severity", "medium"),
-                        "technique_ids": technique_ids, "mitre_ids": [],
-                        "file_path": str(toml_file), "raw": data,
-                    })
-            except Exception:
-                pass
 
 
 # ---------------------------------------------------------------------------
@@ -719,98 +202,27 @@ def _current_run_id() -> str | None:
     return cr.get("run_id") if cr.get("active") else None
 
 
-def _build_dashboard(start=None, end=None, run_id=None) -> dict:
-    # Dashboard aggregates scan millions of SQLite rows (tens of seconds on a
-    # cold cache). Serve a cached/stale payload immediately and refresh it in
-    # the background so no request ever waits on a full rebuild.
-    cache_key = f"{start or ''}|{end or ''}|{run_id or _current_run_id()}"
-    now = time.time()
-    with _dashboard_lock:
-        cached = _dashboard_cache.get(cache_key)
-    if cached and (now - cached[0]) < _DASHBOARD_TTL_SECONDS:
-        return cached[1]
-    if cache_key in _dashboard_rebuilding:
-        # A rebuild is already running: wait briefly for it rather than stacking
-        # another multi-second query load on the store.
-        deadline = now + _DASHBOARD_REBUILD_WAIT_SECONDS
-        while time.time() < deadline:
-            time.sleep(0.5)
-            with _dashboard_lock:
-                cached = _dashboard_cache.get(cache_key)
-            if cached and cached[0] > now:
-                return cached[1]
-    if cached:
-        # stale-while-revalidate: hand back the stale payload now, refresh async
-        with _dashboard_lock:
-            _dashboard_rebuilding.add(cache_key)
-        threading.Thread(target=_rebuild_dashboard, args=(start, end, run_id, cache_key),
-                         daemon=True, name="dashboard-revalidate").start()
-        return cached[1]
-    # No cached payload at all (cold start): register the key so concurrent
-    # first requests coalesce onto one rebuild instead of stacking queries.
-    with _dashboard_lock:
-        _dashboard_rebuilding.add(cache_key)
-    return _rebuild_dashboard(start, end, run_id, cache_key)
-
-
-def _rebuild_dashboard(start=None, end=None, run_id=None, cache_key: str = "") -> dict:
-    try:
-        summary = get_analytics_summary(start=start, end=end, run_id=run_id or _current_run_id())
-        summary["rules_total"] = _rule_count()
-        latest = get_latest_alerts(limit=12)
-        summary["latest_alerts"] = [{
-            "id": a.get("id", a.get("run_id")),
-            "engine": a.get("engine", "correlated"),
-            "title": a.get("title", ""),
-            "severity": a.get("severity", "medium"),
-            "timestamp": a.get("timestamp", ""),
-            "message": a.get("message", ""),
-            "technique_ids": a.get("technique_ids", []),
-            "response_preview": a.get("response_preview", {}),
-        } for a in latest]
-        if latest:
-            rp = latest[0].get("response_preview", {})
-            summary["response_preview"] = rp if isinstance(rp, dict) else json.loads(rp) if isinstance(rp, str) else {}
-        else:
-            summary["response_preview"] = {}
-        summary["zeroclaw"] = {
-            "available": _orch_engine_running,
-            "summary": "Orchestration engine active" if _orch_engine_running else "Orchestration engine not running",
-        }
-        from agents.orchestration_engine import get_latest_runs
-        engine_runs = get_latest_runs()
-        _hands = []
-        for _toml in sorted((_ROOT / "zeroclaw" / "hands").glob("*.toml")):
-            _name = _toml.stem
-            _run = engine_runs.get(_name)
-            _hands.append({
-                "hand_name": _name,
-                "status": {"status": (_run or {}).get("status", {}).get("status", "active" if _orch_engine_running else "idle")},
-            })
-        summary["agents"] = {"hands": _hands}
-        summary["response_actions_total"] = get_kv("response_actions_total", 0)
-        with _dashboard_lock:
-            _dashboard_cache[cache_key] = (time.time(), summary)
-        return summary
-    finally:
-        with _dashboard_lock:
-            _dashboard_rebuilding.discard(cache_key)
-        with _dashboard_lock:
-            _dashboard_rebuilding.discard(cache_key)
-
-
-# --- dashboard payload cache (key -> (built_at, payload)) -------------------
-_DASHBOARD_TTL_SECONDS = float(os.environ.get("FDA_DASHBOARD_TTL_SECONDS", "30"))
-_DASHBOARD_REBUILD_WAIT_SECONDS = float(os.environ.get("FDA_DASHBOARD_REBUILD_WAIT_SECONDS", "45"))
-_dashboard_cache: dict[str, tuple[float, dict]] = {}
-_dashboard_rebuilding: set[str] = set()
-_dashboard_lock = threading.Lock()
-
-
 def _rule_count() -> int:
     conn = init_db()
     row = conn.execute("SELECT COUNT(*) as c FROM rules").fetchone()
     return row["c"] if row else 0
+
+
+def _orch_engine_running_fn() -> bool:
+    return _orch_engine_running
+
+
+# Dashboard service: cached aggregates with stale-while-revalidate
+# (backend/app/services/dashboard.py owns the cache mechanics).
+_dashboard = DashboardService(
+    orchestration_running=lambda: _orch_engine_running,
+    rule_count=_rule_count,
+    run_id_provider=_current_run_id,
+)
+
+
+def _build_dashboard(start=None, end=None, run_id=None) -> dict:
+    return _dashboard.build(start=start, end=end, run_id=run_id)
 
 
 # ---------------------------------------------------------------------------
@@ -835,10 +247,33 @@ async def normalize_api_trailing_slash(request, call_next):
     return await call_next(request)
 
 
+@app.middleware("http")
+async def enforce_runtime_controls(request, call_next):
+    """Apply the live response control plane to API traffic.
+
+    Blocklisted source IPs are refused outright, and per-path/per-IP rate
+    limits from state/response/runtime/rate_limits.json are enforced. The
+    control files are written by the response engine (scripts/apply_response_control.py),
+    so an operator can throttle or ban an actor without restarting the API.
+    """
+    path = request.scope.get("path", "")
+    if path.startswith("/api/"):
+        client_ip = client_ip_from_request(request)
+        if client_ip and is_blocked_ip(client_ip):
+            return enforcement_response(f"Source IP {client_ip} is blocklisted", 403)
+        if client_ip:
+            allowed, remaining, rule = check_and_count_rate_limit(path, client_ip)
+            if not allowed:
+                return enforcement_response(
+                    f"Rate limit exceeded for {path} ({rule.get('requests_per_minute')} req/min)", 429,
+                )
+    return await call_next(request)
+
+
 @app.on_event("startup")
 async def startup():
     init_db()
-    _seed_rules()
+    seed_rules(_ROOT)
     start_event_receiver()
     start_prune_loop()
     start_capture_detection()
@@ -864,7 +299,9 @@ def health():
     return {
         "status": "ok",
         "mode": "native",
-        "simulation": _sim_running.is_set(),
+        # The attack simulator was removed from the server (test-only now);
+        # the flag is kept in the contract so dashboards can assert it stays false.
+        "simulation": False,
         "zeroclaw": _orch_engine_running,
         "elasticsearch": es_available(),
     }
@@ -1558,14 +995,13 @@ async def ingest_event_endpoint(request: Request):
         body = await request.json()
         # Accept single event or batch
         if isinstance(body, list):
+            run_id = _current_run_id()
             results = []
             for event in body:
-                result = ingest_event(event)
-                results.append(result)
+                results.append(ingest_event(event, run_id))
             return {"status": "ok", "ingested": len(results)}
         else:
-            result = ingest_event(body)
-            return result
+            return ingest_event(body, _current_run_id())
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 
@@ -1573,12 +1009,11 @@ async def ingest_event_endpoint(request: Request):
 @app.get("/api/events/status")
 async def event_status():
     """Show event receiver status."""
-    with _event_queue_lock:
-        queue_size = len(_event_queue)
+    from backend.app.services.event_receiver import event_receiver_running
     return {
         "status": "ok",
-        "event_queue_size": queue_size,
-        "event_receiver_running": _event_receiver_running.is_set(),
+        "event_queue_size": event_queue_size(),
+        "event_receiver_running": event_receiver_running(),
     }
 
 

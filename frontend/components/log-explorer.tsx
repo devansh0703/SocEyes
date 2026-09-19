@@ -5,7 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { apiFetch, buildQuery } from "../lib/api";
-import { readCached, writeCached } from "../lib/client-cache";
+import { useCachedState, writeCached } from "../lib/client-cache";
 import { resolveTimeWindow, useGlobalViewState } from "../lib/view-state";
 
 type Section = { title: string; paragraphs?: string[]; bullets?: string[] };
@@ -90,8 +90,8 @@ type Analytics = {
 
 export function LogExplorer() {
   const [viewState] = useGlobalViewState();
-  const [groupedLogs, setGroupedLogs] = useState<GroupedLog[]>(() => readCached<GroupedLog[]>("fda-cache:logs-grouped") || []);
-  const [analytics, setAnalytics] = useState<Analytics>(() => readCached<Analytics>("fda-cache:logs-analytics") || {
+  const [groupedLogs, setGroupedLogs] = useCachedState<GroupedLog[]>("fda-cache:logs-grouped", []);
+  const [analytics, setAnalytics] = useCachedState<Analytics>("fda-cache:logs-analytics", {
     timeline: [],
     suricata_event_types: [],
     suricata_protocols: [],
@@ -100,8 +100,8 @@ export function LogExplorer() {
   });
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [detail, setDetail] = useState<LogDetailPayload | null>(null);
-  const [runState, setRunState] = useState<RunState>(() => readCached<RunState>("fda-cache:run-current") || { active: false });
-  const [history, setHistory] = useState<RunState[]>(() => readCached<RunState[]>("fda-cache:run-history") || []);
+  const [runState, setRunState] = useCachedState<RunState>("fda-cache:run-current", { active: false });
+  const [history, setHistory] = useCachedState<RunState[]>("fda-cache:run-history", []);
   const [runTimeline, setRunTimeline] = useState<TimelinePayload | null>(null);
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
 

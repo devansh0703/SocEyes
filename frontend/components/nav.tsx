@@ -6,7 +6,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { IconBell, IconBot, IconClipboardCheck, IconHistory, IconLayout, IconPlaySquare, IconRadar, IconScroll, IconShieldAlert, IconShieldCheck, IconPackage, IconStore } from "./icons";
 
 import { apiFetch } from "../lib/api";
-import { readCached, writeCached } from "../lib/client-cache";
+import { useCachedState, writeCached } from "../lib/client-cache";
 import { useGlobalViewState } from "../lib/view-state";
 
 const items = [
@@ -53,8 +53,8 @@ function combineDateTime(date: string, time: string): string {
 export function Nav() {
   const pathname = usePathname();
   const [viewState, setViewState] = useGlobalViewState();
-  const [runState, setRunState] = useState<RunState>(() => readCached<RunState>("fda-cache:run-current") || { active: false });
-  const [history, setHistory] = useState<RunState[]>(() => readCached<RunState[]>("fda-cache:run-history") || []);
+  const [runState, setRunState] = useCachedState<RunState>("fda-cache:run-current", { active: false });
+  const [history, setHistory] = useCachedState<RunState[]>("fda-cache:run-history", []);
   const autoStartInFlight = useRef(false);
   const lastAutoStartAttemptMs = useRef(0);
   const [fromDate, setFromDate] = useState("");

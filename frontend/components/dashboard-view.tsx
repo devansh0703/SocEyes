@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import { Area, AreaChart, CartesianGrid, Cell, ComposedChart, Line, Pie, PieChart, Radar, RadarChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { apiFetch, buildQuery } from "../lib/api";
-import { readCached, writeCached } from "../lib/client-cache";
+import { useCachedState, writeCached } from "../lib/client-cache";
 import { resolveTimeWindow, useGlobalViewState } from "../lib/view-state";
 import { DetailSections } from "./detail-sections";
 
@@ -56,7 +56,7 @@ const colors = ["#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe", "#1e3a8a"
 
 export function DashboardView() {
   const [viewState] = useGlobalViewState();
-  const [data, setData] = useState<DashboardPayload | null>(() => readCached<DashboardPayload>("fda-cache:dashboard-view"));
+  const [data, setData] = useCachedState<DashboardPayload | null>("fda-cache:dashboard-view", null);
   const [selectedAlertId, setSelectedAlertId] = useState("");
   const [error, setError] = useState("");
 
