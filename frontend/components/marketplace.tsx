@@ -58,11 +58,11 @@ export function MarketplaceView() {
   if (!packs.length) {
     return (
       <div className="empty-state">
-        <div className="empty-title">Marketplace coming soon</div>
+        <div className="empty-title">No detection packs found</div>
         <div className="empty-message">
-          Community detection packs will be available for download here.
-          <br />
-          In the meantime, browse local packs in the Detection Packs page.
+          No rule packs are present in detection-rules/rules. Run
+          scripts/fetch_rule_corpora.sh to fetch the Sigma, Elastic, Wazuh,
+          and Panther corpora, then restart the server to index them.
         </div>
       </div>
     );
