@@ -33,6 +33,9 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    from app_shared.db_maintenance import apply_footprint_pragmas, start_wal_maintenance
+    apply_footprint_pragmas(conn)
+    start_wal_maintenance(str(db_path))
     # Raw events from all sources
     conn.executescript(
         """

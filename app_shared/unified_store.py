@@ -102,6 +102,9 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    from app_shared.db_maintenance import apply_footprint_pragmas, start_wal_maintenance
+    apply_footprint_pragmas(conn)
+    start_wal_maintenance(str(db_path))
     conn.executescript(
         """
         CREATE TABLE IF NOT EXISTS events (
@@ -1403,11 +1406,26 @@ def prune_events(retention_hours: int = 24) -> dict[str, Any]:
         deleted_events = conn.execute("DELETE FROM events WHERE timestamp < ?", (cutoff,)).rowcount
         deleted_alerts = conn.execute("DELETE FROM alerts WHERE timestamp < ?", (cutoff,)).rowcount
         conn.commit()
+        # Reclaim disk for the deleted pages. incremental_vacuum (with
+        # auto_vacuum=INCREMENTAL) moves free pages to the end of the file and
+        # truncates, without the full-database rewrite of plain VACUUM.
+        pages_freed = 0
+        try:
+            mode = conn.execute("PRAGMA auto_vacuum").fetchone()[0]
+            if mode == 2:  # INCREMENTAL
+                before = conn.execute("PRAGMA freelist_count").fetchone()[0]
+                conn.execute("PRAGMA incremental_vacuum(512)")
+                conn.commit()
+                after = conn.execute("PRAGMA freelist_count").fetchone()[0]
+                pages_freed = max(before - after, 0)
+        except sqlite3.Error as exc:
+            logger.debug("incremental_vacuum skipped: %s", exc)
     return {
         "cutoff": cutoff,
         "retention_hours": retention_hours,
         "events_removed": deleted_events,
         "alerts_removed": deleted_alerts,
+        "pages_freed": pages_freed,
         "pruned": True,
     }
 

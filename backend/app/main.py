@@ -289,6 +289,8 @@ async def shutdown():
     stop_prune_loop()
     stop_capture_detection()
     stop_zeroclaw()
+    from app_shared.db_maintenance import stop_wal_maintenance
+    stop_wal_maintenance()
 
 
 # ---------------------------------------------------------------------------
