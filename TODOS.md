@@ -57,13 +57,28 @@
       prefers-reduced-motion, print stylesheet; --accent-violet token removed
 - [x] python -m backend.app.main serves main:app (was launching agents_api:app)
 
-## P6 (Deferred)
+## P6 (Modularization + footprint pass 2026-09-20) — ALL COMPLETE
 
-- [ ] React #418 hydration mismatch on all pages (static export + runtime data; needs frontend source fix + rebuild)
-- [ ] WAL file 971MB, never checkpoints while server runs (ops: restart window + `PRAGMA wal_checkpoint(TRUNCATE)`)
+- [x] React #418 hydration mismatch fixed: useCachedState() reads
+      localStorage after mount; every readCached-in-initializer migrated
+- [x] WAL bounded + reclaimed: db_maintenance.py (autocheckpoint 2000
+      pages, 15-min TRUNCATE thread, 64MB soft cap, 256MB mmap);
+      prune_events now incremental_vacuums; live result DB 4.66GB ->
+      1.96GB, WAL 1.98GB -> 0
+- [x] agents_api.py + standalone.py deleted (duplicate/broken apps);
+      config.py + schemas.py (unused) deleted; main.py 1628 -> 1064
+      lines with services/ modules (event_receiver, capture_detection,
+      seed_rules, dashboard)
+- [x] runtime_controls wired into API middleware (blocklist + rate
+      limits enforced; /api/response/runtime serves real state — was {})
+- [x] Client crash guards: playbook/zeroclaw/controls nested API access
+- [x] Screenshots consolidated into screenshots/ (12 current captures,
+      5 stale root PNGs removed)
+
+## P7 (Deferred)
+
 - [ ] Stale test: tests/test_response_policy.py::test_defaults_are_safe asserts auto_execute False, but auto-response (commit f7c7873) intentionally sets True — update the test to match the product decision
 - [ ] fda CLI python_bin() falls back to .venv-tools (no uvicorn) when .venv-fda is missing — prefer system python3 in fallback order
-- [ ] agents_api.py duplicates main.py (rules/attack/response endpoints); consolidate or delete the second app
 
 ## Verification
 
