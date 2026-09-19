@@ -82,9 +82,19 @@ else
     warn "Go not found — skipping agent build (install Go 1.25+ for packet capture)"
 fi
 
-# ── Step 6: Index ALL detection rules ──────────────────────────────────
+# ── Step 6: Rule corpora ─────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}Step 6: Indexing all IDS rules${RESET}"
+echo -e "${BOLD}Step 6: Rule corpora${RESET}"
+if [ ! -d "$FDA_DIR/sigma/rules" ] || [ ! -d "$FDA_DIR/panther-analysis/rules" ]; then
+    info "Fetching detection rule corpora (Sigma, Elastic, Wazuh, Panther)..."
+    bash "$FDA_DIR/scripts/fetch_rule_corpora.sh" || warn "Some corpora failed to fetch — run scripts/fetch_rule_corpora.sh to retry"
+else
+    ok "Rule corpora already present"
+fi
+
+# ── Step 7: Index ALL detection rules ───────────────────────────────────
+echo ""
+echo -e "${BOLD}Step 7: Indexing all IDS rules${RESET}"
 cd "$FDA_DIR"
 "$VENV_DIR/bin/python" -c "
 import sys, yaml

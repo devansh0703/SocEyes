@@ -44,7 +44,7 @@ from app_shared.response_policy import (
 from app_shared.text_utils import now_utc, clean_text
 from app_shared.retention import read_retention_hours
 from app_shared.state_paths import read_json, read_jsonl, state_path
-from backend.app.standalone import start_simulation, stop_simulation, _sim_running
+from backend.app.standalone import start_simulation, stop_simulation, _sim_running  # _sim_running kept for health contract; start/stop are test-only no-ops
 
 # ---------------------------------------------------------------------------
 # Config
@@ -585,6 +585,42 @@ def _seed_rules():
                     })
             except Exception:
                 pass
+
+    # 3. Panther rules (panther-analysis/{rules,correlation_rules,policies}/**/*.yml)
+    #    Panther uses PascalCase keys (RuleID, Severity, Tags) — different schema from Sigma.
+    panther_root = _ROOT / "panther-analysis"
+    if panther_root.exists():
+        panther_dirs = ["rules", "correlation_rules", "policies"]
+        panther_count = 0
+        for sub in panther_dirs:
+            subdir = panther_root / sub
+            if not subdir.exists():
+                continue
+            for yml in subdir.rglob("*.yml"):
+                try:
+                    data = yaml.safe_load(yml.read_text())
+                    if not isinstance(data, dict):
+                        continue
+                    # Policy/Rule docs carry AnalysisType: Rule|Policy; correlation rules
+                    # use Detection without a RuleID — key those by file stem.
+                    rule_id = data.get("RuleID") or data.get("PolicyID") or (data.get("AnalysisType") and yml.stem)
+                    if not rule_id:
+                        continue
+                    tags = [str(t) for t in data.get("Tags", [])]
+                    mitre_ids = sorted({str(t).split(".")[0] for t in tags if t.upper().startswith("T") and any(c.isdigit() for c in t[:6])})
+                    index_rule({
+                        "rule_id": f"panther-{rule_id}", "engine": "panther",
+                        "title": data.get("DisplayName") or str(rule_id),
+                        "description": data.get("Description") or data.get("Summary") or "",
+                        "severity": str(data.get("Severity") or "medium").lower(),
+                        "technique_ids": mitre_ids, "mitre_ids": mitre_ids,
+                        "file_path": str(yml), "raw": data,
+                    })
+                    panther_count += 1
+                except Exception:
+                    pass
+        if panther_count:
+            logger.info("Indexed %d Panther rules", panther_count)
 
     det_dir = _ROOT / "detection-rules" / "rules"
     if det_dir.exists() and tomllib:
@@ -1224,12 +1260,35 @@ def get_runtime():
 
 @app.get("/api/honeypot/sessions")
 def honeypot_sessions(limit: int = 12):
-    return {"items": []}
+    """Real honeypot sessions from state/honeypot/sessions.jsonl (written by the
+    response engine when containment containers are created)."""
+    sessions_file = state_path("honeypot", "sessions.jsonl")
+    items = []
+    if sessions_file.exists():
+        for raw in read_jsonl(sessions_file, limit=limit):
+            if not isinstance(raw, dict):
+                continue
+            items.append({
+                "session_id": raw.get("container_name") or raw.get("container_id", ""),
+                "container_id": raw.get("container_id", ""),
+                "container_name": raw.get("container_name", ""),
+                "created_at": raw.get("created_at", ""),
+                "severity": raw.get("severity", "medium"),
+                "source_ip": raw.get("source_ip", ""),
+                "events_captured": int(raw.get("events_captured", 0) or 0),
+                "log_path": raw.get("log_path", ""),
+                "message": raw.get("message", ""),
+            })
+    return {"items": items, "total": len(items)}
 
 
 @app.get("/api/honeypot/sessions/{session_id}")
 def honeypot_session(session_id: str):
-    raise HTTPException(status_code=404, detail="Not found")
+    sessions_file = state_path("honeypot", "sessions")
+    session_file = sessions_file / session_id / "session.json"
+    if not session_file.exists():
+        raise HTTPException(status_code=404, detail="Honeypot session not found")
+    return read_json(session_file)
 
 
 @app.get("/api/cloud/exposure")
@@ -1303,7 +1362,7 @@ async def pack_rules(pack_id: str):
 
 @app.get("/api/marketplace/packs")
 async def marketplace_packs():
-    """List marketplace packs (currently same as local packs)."""
+    """List marketplace packs — real data only, no fabricated download counts or ratings."""
     from pathlib import Path
     rules_dir = _ROOT / "detection-rules" / "rules"
     packs = []
@@ -1320,10 +1379,28 @@ async def marketplace_packs():
                     "tags": [d.name],
                     "author": "fda",
                     "version": "1.0",
-                    "downloads": 0,
-                    "rating": 0,
                 })
     return {"packs": packs}
+
+
+@app.get("/api/marketplace/packs/{pack_id}/download")
+async def download_pack(pack_id: str):
+    """Download a detection pack as a zip of its rule files (real assets, built on demand)."""
+    import io
+    import zipfile
+    rules_dir = _ROOT / "detection-rules" / "rules" / pack_id
+    if not rules_dir.is_dir() or pack_id.startswith("_"):
+        raise HTTPException(status_code=404, detail=f"Pack '{pack_id}' not found")
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for toml_file in sorted(rules_dir.rglob("*.toml")):
+            zf.write(toml_file, arcname=str(toml_file.relative_to(rules_dir)))
+    buf.seek(0)
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{pack_id}.zip"'},
+    )
 
 
 @app.get("/api/responses/audit")

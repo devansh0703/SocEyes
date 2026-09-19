@@ -45,10 +45,11 @@ Single-box IDS/IPS with AI-driven triage and nftables enforcement. Detects real 
 ### 1. Install
 
 ```bash
-./install.sh
+./scripts/fetch_rule_corpora.sh   # fetch detection rule corpora (Sigma, Elastic, Wazuh, Panther)
+./install.sh                      # venv, deps, frontend build, rule indexing
 ```
 
-Creates a Python venv, installs dependencies, builds the frontend, and indexes all detection rules.
+The fetcher pulls the gitignored rule corpora from their upstream repos (shallow clone, tarball fallback) and is safe to re-run. `install.sh` then indexes every corpus into the rule catalog — Sigma, Elastic, Wazuh, and Panther engines all appear in the rule explorer.
 
 ### 2. Configure
 
