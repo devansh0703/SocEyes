@@ -741,12 +741,15 @@ def _rebuild_dashboard(start=None, end=None, run_id=None, cache_key: str = "") -
         }
         from agents.orchestration_engine import get_latest_runs
         engine_runs = get_latest_runs()
-        summary["agents"] = {
-            "hands": [
-                {"hand_name": name, "status": {"status": run.get("status", {}).get("status", "active")}}
-                for name, run in engine_runs.items()
-            ]
-        }
+        _hands = []
+        for _toml in sorted((_ROOT / "zeroclaw" / "hands").glob("*.toml")):
+            _name = _toml.stem
+            _run = engine_runs.get(_name)
+            _hands.append({
+                "hand_name": _name,
+                "status": {"status": (_run or {}).get("status", {}).get("status", "active" if _orch_engine_running else "idle")},
+            })
+        summary["agents"] = {"hands": _hands}
         summary["response_actions_total"] = get_kv("response_actions_total", 0)
         with _dashboard_lock:
             _dashboard_cache[cache_key] = (time.time(), summary)

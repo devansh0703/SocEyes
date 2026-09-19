@@ -1286,16 +1286,17 @@ select {
 /* --- Rules FAB --- */
 .rules-fab {
   position: fixed;
-  right: 26px;
-  bottom: 26px;
-  width: 280px;
-  min-height: 84px;
-  border: 4px solid var(--blue-400);
+  right: 22px;
+  bottom: 22px;
+  width: auto;
+  min-height: 0;
+  padding: 14px 22px;
+  border: 3px solid var(--blue-400);
   border-radius: 0;
   background: var(--blue-600);
   color: var(--blue-950);
   font-family: var(--font-heading), sans-serif;
-  font-size: 1.15rem;
+  font-size: 0.95rem;
   font-weight: 900;
   cursor: pointer;
   box-shadow: 0 0 0 0px transparent;
