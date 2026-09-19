@@ -1,7 +1,15 @@
 # FDA Cyber Control
 
-Single-box IDS/IPS with AI-driven triage and nftables enforcement.
-Detects real network traffic, correlates across engines, explains in plain English, and enforces containment on the kernel.
+Single-box IDS/IPS with AI-driven triage and nftables enforcement. Detects real network traffic, correlates across engines, explains in plain English, and enforces containment on the kernel.
+
+![Dashboard](screenshots/Dashboard.png)
+![Alerts](screenshots/Alerts.png)
+![Agents](screenshots/Agents.png)
+![Incidents](screenshots/Incidents.png)
+![Audit Log](screenshots/Audit_Log.png)
+![Command Center](screenshots/Command_Center.png)
+![Detection Rules](screenshots/Detection_Rules.png)
+![MITRE Playbooks](screenshots/MITRE_Playbooks.png)
 
 ## What It Does
 
@@ -27,6 +35,7 @@ Detects real network traffic, correlates across engines, explains in plain Engli
 ## Installation
 
 ### Prerequisites
+
 - Python 3.10+
 - Go 1.25+ (for the capture agent)
 - libpcap-dev (compile-time for Go agent)
@@ -77,20 +86,73 @@ sudo ./fda-agent
 
 The agent captures packets on the default interface and POSTs decoded events to the API at http://localhost:8001/api/events/ingest.
 
+## Screenshots
+
+### Dashboard
+
+The main mission control view showing live telemetry, detection stats, and system status.
+
+![Dashboard](screenshots/Dashboard.png)
+
+### Alerts
+
+Live alert feed from Elastic, Wazuh, and Suricata with severity indicators and MITRE technique mapping.
+
+![Alerts](screenshots/Alerts.png)
+
+### Agents
+
+ZeroClaw agent hands status showing 18 parallel execution channels.
+
+![Agents](screenshots/Agents.png)
+
+### Incidents
+
+Correlated incident view combining multiple detection engines into unified incident timelines.
+
+![Incidents](screenshots/Incidents.png)
+
+### Audit Log
+
+Complete audit trail of all AI decisions and enforcement actions with rollback status.
+
+![Audit Log](screenshots/Audit_Log.png)
+
+### Command Center
+
+Operational command center with detection metrics, run history, and system health.
+
+![Command Center](screenshots/Command_Center.png)
+
+### Detection Rules
+
+Searchable rule explorer with BM25 full-text search across 6000+ detection rules.
+
+![Detection Rules](screenshots/Detection_Rules.png)
+
+### MITRE Playbooks
+
+MITRE ATT&CK playbook browser with live detection context and executable response commands.
+
+![MITRE Playbooks](screenshots/MITRE_Playbooks.png)
+
 ## API Endpoints
 
 ### Events
+
 ```
 POST /api/events/ingest         Ingest captured events (single or batch)
 GET  /api/events/status         Event receiver status
 ```
 
 ### AI Triage
+
 ```
 GET  /api/health                 Health check + config status
 ```
 
 ### Dashboard
+
 ```
 GET  /                          React frontend (Command Center)
 ```
