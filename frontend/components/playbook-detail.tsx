@@ -13,7 +13,7 @@ type PlaybookPayload = {
   technique_id: string;
   path: string;
   available: boolean;
-  sections: Section[];
+  sections?: Section[];
 };
 
 type RuleMatch = {
@@ -82,7 +82,7 @@ export function PlaybookDetail({ techniqueId }: { techniqueId: string }) {
               <span className="chip">stop {timeline?.stop_time ? new Date(timeline.stop_time).toLocaleString() : "n/a"}</span>
             </div>
           </div>
-          <DetailSections sections={playbook.sections} />
+          <DetailSections sections={playbook.sections || []} />
         </div>
 
         <div className="panel padded">

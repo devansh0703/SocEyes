@@ -71,7 +71,7 @@ export function ResponseCenter() {
         apiFetch<{ items: HoneypotSession[] }>("/api/honeypot/sessions?limit=8"),
       ]);
       setControls(runtime);
-      setResponseAlerts(alerts.items.filter((item) => item.engine === "response" || item.response_preview?.preview_command));
+      setResponseAlerts((alerts.items || []).filter((item) => item.engine === "response" || item.response_preview?.preview_command));
       setHoneypots(hp.items || []);
     };
     load().catch(() => {});
@@ -102,7 +102,7 @@ export function ResponseCenter() {
               <div className="detail-card">
                 <h3>Disabled accounts</h3>
                 <div className="history-list">
-                  {controls.disabled_accounts.map((entry) => (
+                  {(controls.disabled_accounts || []).map((entry) => (
                     <div key={`${entry.username}-${entry.updated_at}`} className="history-item">
                       <strong>{entry.username || "account"}</strong>
                       <span>{entry.updated_at || entry.reason || "active"}</span>
@@ -113,7 +113,7 @@ export function ResponseCenter() {
               <div className="detail-card">
                 <h3>Blocked source addresses</h3>
                 <div className="history-list">
-                  {controls.blocked_ips.map((entry) => (
+                  {(controls.blocked_ips || []).map((entry) => (
                     <div key={`${entry.ip}-${entry.updated_at}`} className="history-item">
                       <strong>{entry.ip || "address"}</strong>
                       <span>{entry.updated_at || entry.reason || "active"}</span>
@@ -124,7 +124,7 @@ export function ResponseCenter() {
               <div className="detail-card">
                 <h3>Rate limits</h3>
                 <div className="history-list">
-                  {controls.rate_limits.map((entry) => (
+                  {(controls.rate_limits || []).map((entry) => (
                     <div key={`${entry.path}-${entry.source_ip}-${entry.updated_at}`} className="history-item">
                       <strong>{entry.path || "path"}</strong>
                       <span>{entry.requests_per_minute || 0} req/min</span>

@@ -143,7 +143,7 @@ export function AgentBoard({ embedded }: { embedded?: AgentsPayload }) {
             {payload.zeroclaw?.available ? (
               <div className="detail-stack tight">
                 <p>{payload.zeroclaw.summary}</p>
-                {payload.zeroclaw.daemon?.reachable ? (
+                {payload.zeroclaw.daemon && payload.zeroclaw.daemon.reachable ? (
                   <div className="metric-pills">
                     <div className="metric-pill">
                       <span>gateway</span>

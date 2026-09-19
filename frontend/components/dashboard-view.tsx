@@ -27,7 +27,7 @@ type AlertItem = {
     success_criteria: string;
     technical_explanation?: string;
     nontechnical_explanation?: string;
-    playbook: { sections: Section[] };
+    playbook?: { sections: Section[] };
   };
 };
 
@@ -239,7 +239,7 @@ export function DashboardView() {
               <div>{preview.success_criteria}</div>
             </div>
           </div>
-          <DetailSections sections={preview.playbook.sections.slice(0, 3)} />
+          <DetailSections sections={(preview.playbook?.sections || []).slice(0, 3)} />
         </div>
       </section>
 

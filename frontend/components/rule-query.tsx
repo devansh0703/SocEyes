@@ -161,7 +161,7 @@ export function RuleQuery() {
                 {selected.playbooks.map((playbook) => (
                   <div key={playbook.technique_id} className="playbook-card">
                     <div className="chip accent">{playbook.technique_id}</div>
-                    <DetailSections sections={playbook.sections.slice(0, 3)} />
+                    <DetailSections sections={(playbook.sections || []).slice(0, 3)} />
                   </div>
                 ))}
               </div>

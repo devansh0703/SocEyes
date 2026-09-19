@@ -90,4 +90,4 @@ frontend/.next/
 frontend/out/
 frontend/dist/
 frontend/coverage/
-frontend/*.log
+frontend/*.logfrontend/tsconfig.tsbuildinfo
