@@ -34,13 +34,10 @@ venv/
 !.runtime/zeroclaw-home/.gitkeep
 
 # Runtime state - databases, logs, and scratch. Never commit.
-state/*.sqlite
-state/*.sqlite-*
-state/logs/*
-!state/logs/.gitkeep
-state/logstash/*
+state/*
+!state/honeypot/.gitkeep
 !state/logstash/.gitkeep
-state/response/*
+!state/orchestration/.gitkeep
 !state/response/.gitkeep
 state/orchestration/*
 !state/orchestration/.gitkeep
@@ -90,4 +87,5 @@ frontend/.next/
 frontend/out/
 frontend/dist/
 frontend/coverage/
-frontend/*.logfrontend/tsconfig.tsbuildinfo
+frontend/*.log
+*.tsbuildinfo
