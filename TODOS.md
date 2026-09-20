@@ -75,18 +75,48 @@
 - [x] Screenshots consolidated into screenshots/ (12 current captures,
       5 stale root PNGs removed)
 
-## P7 (Deferred)
+## P7 (Detection live-fire pass 2026-09-20) — ALL COMPLETE
 
-- [ ] Stale test: tests/test_response_policy.py::test_defaults_are_safe asserts auto_execute False, but auto-response (commit f7c7873) intentionally sets True — update the test to match the product decision
+- [x] Detection loop was deaf: queried source "capture-agent" (not a key in
+  _SOURCE_INDEX_MAP) -> filtered a nonexistent index. Fixed to "capture".
+- [x] Port-scan alerts false-positived on ambient loopback traffic (20 ports /
+  60s window). Now requires a 15s burst of 20+ distinct ports — scans alert,
+  ambient noise does not. Unit-tested (ambient/scan/mixed/shuffled).
+- [x] Agent amplification loop: capturing its own POSTs on loopback grew
+  exponentially until agent AND server died (377k events in minutes). Agent
+  now derives the API port from FDA_API_URL and drops self-traffic; ingest
+  failures are logged (throttled). Rebuilt + running.
+- [x] Stale root-owned agent process (no filter) was flooding the pipeline —
+  killed; agent now runs unprivileged via cap_net_raw (setcap in install.sh).
+- [x] Wazuh corpus was the wrong repo (engine source, zero rules) — fetch
+  script + .gitignore now use wazuh/wazuh-ruleset; new XML seeder indexes 147
+  rules (total catalog: sigma 3,110 + elastic 1,764 + panther 1,024 + wazuh).
+- [x] Sigma YAMLs with date values crashed JSON serialization and were
+  silently skipped — rule raw payloads now sanitized before storage.
+- [x] python -m backend.app.main honors documented FDA_PORT (was hardcoded).
+- [x] fda.sh: capture-agent added as a managed service; install bootstrap
+  calls the real 4-engine seeder (inline copy had a broken rgglob call).
+- [x] Response policy factory default auto_execute True -> False (unsafe
+  default); operator's persisted choice unchanged.
+- [x] LIVE-FIRE VERIFIED: 60-port TCP scan on loopback -> high alert
+  "Port scan reconnaissance (T1046)" in 4 seconds, visible in
+  /api/alerts/live with response preview attached.
+
+## P8 (Deferred)
+
 - [ ] fda CLI python_bin() falls back to .venv-tools (no uvicorn) when .venv-fda is missing — prefer system python3 in fallback order
 
 ## Verification
 
-- 48 Python tests passing (1 stale test deselected, see P6)
-- Go agent compiles and captures real ICMP traffic (verified with sudo)
+- 48 Python tests passing
+- Go agent compiles, runs unprivileged (cap_net_raw), filters self-traffic,
+  and captures live loopback traffic
 - nftables enforcement verified with sudo (block_source_ip, isolate_host)
 - All commits on master branch
 - QA 2026-09-20: 10 issues found, 10 fixed, health 31 -> 84 (report: .gstack/qa-reports/qa-report-fda-cyber-control-2026-09-20.md)
 - De-stub + premium pass 2026-09-20: 1024 Panther rules searchable, pack
   zips download, honeypot real data, zero lucide code in bundle,
   simulation:false in health, all 8 pages render with real data
+- Detection live-fire 2026-09-20: real port scan -> alert in 4s; 4-engine
+  rule catalog fully indexed (sigma 3,110 / elastic 1,764 / panther 1,024 /
+  wazuh 147 XML rules)
