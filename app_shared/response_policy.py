@@ -14,7 +14,9 @@ ACTION_MAP_FILE = Path("config/response/actions.yml")
 RESPONSE_INDEX_PREFIX = "security-response"
 
 DEFAULT_POLICY: dict[str, Any] = {
-    "auto_execute": True,
+    # Safe by default: automatic response execution must be an explicit
+    # operator decision (Runtime Controls UI), never a factory default.
+    "auto_execute": False,
     "engines": {
         "elastic": False,
         "wazuh": False,
