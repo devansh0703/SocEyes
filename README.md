@@ -2,22 +2,20 @@
 
 Single-box IDS/IPS with AI-driven triage and nftables enforcement. Detects real network traffic, correlates across engines, explains in plain English, and enforces containment on the kernel.
 
+![Mission](screenshots/Mission.png)
 ![Dashboard](screenshots/Dashboard.png)
 ![Alerts](screenshots/Alerts.png)
-![Agents](screenshots/Agents.png)
 ![Incidents](screenshots/Incidents.png)
-![Audit Log](screenshots/Audit_Log.png)
-![Command Center](screenshots/Command_Center.png)
-![Detection Rules](screenshots/Detection_Rules.png)
-![MITRE Playbooks](screenshots/MITRE_Playbooks.png)
+![Responses](screenshots/Responses.png)
+![Audit](screenshots/Audit.png)
 
 ## What It Does
 
-1. **Real packet capture** — Go agent captures raw traffic via AF_PACKET (eBPF ready)
+1. **Real packet capture** — Go agent captures raw traffic via AF_PACKET (eBPF ready), emitting frame/payload lengths for volume analysis
 2. **Real log ingestion** — journald, auditd, syslog, nginx, Windows Event Log
-3. **Detection** — 6000+ rules (Sigma, Elastic, Wazuh, Panther) with BM25 search
+3. **Detection** — 6000+ rules (Sigma, Elastic, Wazuh, Panther) with BM25 search, plus five streaming capture detectors: port scan (T1046), SSH brute force (T1110), SYN flood (T1498), C2 beaconing (T1071), and data exfiltration (T1041)
 4. **AI triage** — the response engine runs NVIDIA LLM triage on every high/critical alert (rule-based fallback without a key); verdicts land on the incident card and in the Audit Log
-5. **Enforcement** — nftables set-based blocks, real rate-limit+drop throttling, account locks; TTL-based auto-rollback survives restarts
+5. **Enforcement** — nftables set-based blocks, real rate-limit+drop throttling, account locks; TTL-based auto-rollback survives restarts; the machine's own interface IPs are never enforceable targets
 6. **ZeroClaw agents** — 18 TOML-configured hands run deterministic logic on real events
 
 ## Architecture
@@ -113,9 +111,15 @@ FDA_API_URL=http://<server-ip>:8000 FDA_AGENT_INTERFACE=eth0 ./bin/fda-agent
 
 ## Screenshots
 
+### Mission
+
+Ops briefing with live pipeline state — capture rate, detector verdicts, enforcement posture, and the fastest paths to action.
+
+![Mission](screenshots/Mission.png)
+
 ### Dashboard
 
-The main mission control view showing live telemetry, detection stats, and system status.
+KPI strip with sparklines, volume timeline, severity mix, top talkers, and the live alert stream with AI verdicts.
 
 ![Dashboard](screenshots/Dashboard.png)
 
@@ -133,33 +137,21 @@ ZeroClaw agent hands status showing 18 parallel execution channels.
 
 ### Incidents
 
-Correlated incident view combining multiple detection engines into unified incident timelines.
+Severity-first incident queue with AI verdicts and one-click response actions.
 
 ![Incidents](screenshots/Incidents.png)
+
+### Responses
+
+Every enforcement decision — pending, executed, and rolled back — with the command that ran.
+
+![Responses](screenshots/Responses.png)
 
 ### Audit Log
 
 Complete audit trail of all AI decisions and enforcement actions with rollback status.
 
-![Audit Log](screenshots/Audit_Log.png)
-
-### Command Center
-
-Operational command center with detection metrics, run history, and system health.
-
-![Command Center](screenshots/Command_Center.png)
-
-### Detection Rules
-
-Searchable rule explorer with BM25 full-text search across 6000+ detection rules.
-
-![Detection Rules](screenshots/Detection_Rules.png)
-
-### MITRE Playbooks
-
-MITRE ATT&CK playbook browser with live detection context and executable response commands.
-
-![MITRE Playbooks](screenshots/MITRE_Playbooks.png)
+![Audit](screenshots/Audit.png)
 
 ## API Endpoints
 

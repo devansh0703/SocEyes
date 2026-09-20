@@ -29,11 +29,10 @@ import sqlite3
 import threading
 import time
 from datetime import datetime, timedelta, timezone
-from datetime import datetime, timezone
 
 from app_shared.response_policy import action_detail, choose_action, render_command_preview
 from app_shared.state_paths import state_path
-from app_shared.unified_store import get_kv, query_events, set_kv, store_alert, store_event
+from app_shared.unified_store import exfil_volumes, get_kv, query_events, set_kv, store_alert, store_event
 
 logger = logging.getLogger("fda.services.capture_detection")
 
@@ -60,6 +59,23 @@ _SCAN_READ_LIMIT = _env_int("FDA_SCAN_READ_LIMIT", 20000)    # max events read p
 # only when deliberately testing scan detection on loopback.
 _SCAN_SUPPRESS_LOOPBACK = os.environ.get("FDA_SCAN_SUPPRESS_LOOPBACK", "true").lower() in ("true", "1", "yes")
 
+# Self-block safety net: the local host's own addresses (learned at loop
+# start from the routing table) are never emitted as scan sources. A
+# self-inflicted nftables block of the API host takes the whole console
+# down with it — including the rollback sweeper.
+_self_ips: set[str] = set()
+
+
+def _refresh_self_ips() -> None:
+    try:
+        import socket
+        host = socket.gethostname()
+        for info in socket.getaddrinfo(host, None, socket.AF_INET):
+            _self_ips.add(info[4][0])
+        _self_ips.add("127.0.0.1")
+    except OSError:
+        pass
+
 # --- SSH brute-force detection tuning ---------------------------------------
 # Repeated connection attempts to a single SSH port: real logins are rare;
 # credential-stuffing retries dozens of times per minute.
@@ -73,6 +89,24 @@ _BRUTE_COOLDOWN_SEC = _env_int("FDA_BRUTE_COOLDOWN_SEC", 300)
 _FLOOD_WINDOW_SEC = _env_int("FDA_FLOOD_WINDOW_SEC", 10)
 _FLOOD_THRESHOLD = _env_int("FDA_FLOOD_THRESHOLD", 100)       # SYNs to one port within window
 _FLOOD_COOLDOWN_SEC = _env_int("FDA_FLOOD_COOLDOWN_SEC", 300)
+
+# --- C2 beaconing detection tuning -----------------------------------------
+# A command-and-control implant checks in on a fixed schedule. Random human
+# traffic has irregular timing; beacon flows show near-constant intervals
+# (low jitter) across many connections inside the window.
+_BEACON_WINDOW_SEC = _env_int("FDA_BEACON_WINDOW_SEC", 600)     # analysis window
+_BEACON_MIN_CONNECTIONS = _env_int("FDA_BEACON_MIN_CONNECTIONS", 8)  # SYNs per flow
+_BEACON_MAX_JITTER = 0.25 if not os.environ.get("FDA_BEACON_MAX_JITTER") else float(os.environ["FDA_BEACON_MAX_JITTER"])
+_BEACON_MIN_INTERVAL_SEC = 0.5    # below this, regularity is keepalive chatter
+_BEACON_MAX_INTERVAL_SEC = 3600.0
+_BEACON_COOLDOWN_SEC = _env_int("FDA_BEACON_COOLDOWN_SEC", 1800)
+
+# --- data exfiltration tuning -----------------------------------------------
+# One source pushing an unusual volume to a single destination inside the
+# window: staging + upload, or a compromised host streaming data out.
+_EXFIL_WINDOW_SEC = _env_int("FDA_EXFIL_WINDOW_SEC", 60)
+_EXFIL_BYTES_THRESHOLD = _env_int("FDA_EXFIL_BYTES_THRESHOLD", 100_000_000)  # 100 MB / window
+_EXFIL_COOLDOWN_SEC = _env_int("FDA_EXFIL_COOLDOWN_SEC", 600)
 
 # --- rule-match phase tuning ----------------------------------------------
 _MATCH_WATERMARK_KEY = "capture_detection.match_watermark"
@@ -90,6 +124,14 @@ _flood_state_lock = threading.Lock()
 # (src_ip, dst_port) -> (last_alert_epoch, [syn_epochs])
 _flood_windows: dict[tuple[str, int], tuple[float, list[float]]] = {}
 
+_beacon_state_lock = threading.Lock()
+# (src_ip, dst_ip, dst_port) -> last_alert_epoch
+_beacon_alerted: dict[tuple[str, str, int], float] = {}
+
+_exfil_state_lock = threading.Lock()
+# (src_ip, dst_ip) -> last_alert_epoch
+_exfil_alerted: dict[tuple[str, str], float] = {}
+
 _SEVERITY_ORDER_SQL = (
     "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
     "WHEN 'medium' THEN 2 ELSE 3 END"
@@ -98,6 +140,7 @@ _SEVERITY_ORDER_SQL = (
 
 def _detect_from_capture_loop() -> None:
     """Scan capture-agent events for suspicious patterns and match IDS alerts against indexed rules."""
+    _refresh_self_ips()
     logger.info("Capture detection loop started")
 
     while _CAPTURE_DETECT_RUNNING.is_set():
@@ -105,6 +148,8 @@ def _detect_from_capture_loop() -> None:
             _detect_port_scans()
             _detect_ssh_brute_force()
             _detect_syn_flood()
+            _detect_c2_beacons()
+            _detect_data_exfil()
             _match_alerts_to_rules()
         except Exception as exc:
             logger.warning("Capture detection error: %s", exc)
@@ -165,6 +210,14 @@ def _detect_port_scans() -> None:
                 continue  # local service chatter, not reconnaissance
             if proto and proto not in ("TCP", "TCP6"):
                 continue
+            # Count only SYN probes: a rejected connection makes the TARGET
+            # send an RST back, and counting replies as probes made the host
+            # look like the scanner (it "probed" every client's ephemeral
+            # port) — the response engine then blocked the host itself.
+            if not _is_syn(ev):
+                continue
+            if src_ip in _self_ips:
+                continue  # never let the console attack itself
             entry = _scan_windows.get(src_ip)
             if entry is None:
                 _scan_windows[src_ip] = (ev_ts, 0.0, [(ev_ts, dst_port)])
@@ -393,6 +446,154 @@ def _detect_syn_flood() -> None:
                 _flood_windows[(src_ip, dst_port)] = (last_alert, fresh)
 
 
+def _flow_events(window_sec: int) -> list[dict]:
+    """Capture events inside the window, TCP-only, loopback-to-loopback dropped.
+
+    Shared by the beacon and exfil detectors: both analyze per-flow behavior,
+    and both must ignore local service chatter.
+    """
+    window_start_iso = (
+        datetime.now(timezone.utc) - timedelta(seconds=window_sec)
+    ).isoformat()
+    events = query_events(sources=["capture"], start=window_start_iso, limit=_SCAN_READ_LIMIT)
+    out: list[dict] = []
+    for ev in events:
+        proto = (ev.get("protocol", "") or ev.get("network_transport", "") or "").upper()
+        if proto not in ("TCP", "TCP6"):
+            continue
+        src_ip = ev.get("source_ip", "") or ""
+        dst_ip = ev.get("destination_ip", "") or ""
+        if not src_ip or src_ip == "0.0.0.0" or not ev.get("destination_port"):
+            continue
+        if _SCAN_SUPPRESS_LOOPBACK and src_ip.startswith("127.") and dst_ip.startswith("127."):
+            continue
+        out.append(ev)
+    return out
+
+
+def _jitter_ratio(intervals: list[float]) -> float:
+    """Coefficient of variation of inter-connection intervals (0 = metronome)."""
+    if len(intervals) < 2:
+        return 1.0
+    mean = sum(intervals) / len(intervals)
+    if mean <= 0:
+        return 1.0
+    variance = sum((x - mean) ** 2 for x in intervals) / len(intervals)
+    return (variance ** 0.5) / mean
+
+
+def _detect_c2_beacons() -> None:
+    """Detect C2 beaconing: regular, repeated connection attempts to one endpoint.
+
+    Groups bare SYNs by flow (src, dst, dst_port). A flow with at least
+    _BEACON_MIN_CONNECTIONS inside _BEACON_WINDOW_SEC whose inter-connection
+    intervals show near-metronome regularity (jitter ratio <= _BEACON_MAX_JITTER)
+    is an implant checking in on a schedule — random traffic does not keep time.
+    Stateless per pass (the full window is re-read); per-flow cooldown rates
+    the alert. MITRE T1071 (Application Layer Protocol).
+    """
+    now = time.time()
+    cutoff = now - _BEACON_WINDOW_SEC
+    flows: dict[tuple[str, str, int], list[float]] = {}
+    for ev in _flow_events(_BEACON_WINDOW_SEC):
+        ev_ts = _parse_event_ts(ev.get("timestamp"))
+        if ev_ts < cutoff:
+            continue
+        if not _is_syn(ev):
+            continue
+        key = (ev.get("source_ip", ""), ev.get("destination_ip", ""), ev.get("destination_port") or 0)
+        flows.setdefault(key, []).append(ev_ts)
+
+    with _beacon_state_lock:
+        for (src_ip, dst_ip, dst_port), stamps in flows.items():
+            stamps = sorted(stamps)
+            intervals = [b - a for a, b in zip(stamps, stamps[1:])]
+            if len(stamps) < _BEACON_MIN_CONNECTIONS or not intervals:
+                continue
+            mean_interval = sum(intervals) / len(intervals)
+            if not (_BEACON_MIN_INTERVAL_SEC <= mean_interval <= _BEACON_MAX_INTERVAL_SEC):
+                continue
+            jitter = _jitter_ratio(intervals)
+            if jitter > _BEACON_MAX_JITTER:
+                continue
+            if now - _beacon_alerted.get((src_ip, dst_ip, dst_port), 0.0) < _BEACON_COOLDOWN_SEC:
+                continue
+            _emit_capture_alert(
+                "C2 beaconing", "T1071", "high",
+                "C2 beaconing to external endpoint (T1071)",
+                f"{len(stamps)} regular connection attempts from {src_ip} to "
+                f"{dst_ip}:{dst_port} within {_BEACON_WINDOW_SEC}s "
+                f"(mean interval {mean_interval:.1f}s, jitter {jitter:.2f} — "
+                f"near-fixed check-in schedule; packet capture).",
+                src_ip, dst_ip,
+            )
+            _beacon_alerted[(src_ip, dst_ip, dst_port)] = now
+        # Cooldown entries age out with the window.
+        expired = [k for k, ts in _beacon_alerted.items() if now - ts > _BEACON_COOLDOWN_SEC * 2]
+        for k in expired:
+            _beacon_alerted.pop(k, None)
+
+
+def _frame_len(ev: dict) -> int:
+    """Wire size of a captured packet (agent ships frame_len; older events may omit it)."""
+    val = ev.get("frame_len")
+    if val is None:
+        raw = ev.get("raw")
+        if isinstance(raw, dict):
+            val = raw.get("frame_len")
+    try:
+        return int(val or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def _detect_data_exfil() -> None:
+    """Detect bulk outbound data transfer: staging-then-upload volume signature.
+
+    Sums captured wire bytes per (source, destination) flow inside
+    _EXFIL_WINDOW_SEC using an SQL GROUP BY over the numeric frame_len
+    column — a 150 MB transfer is 100k+ packets, far past any event-read
+    limit, so volume must be aggregated in the database, not in Python.
+    One source pushing more than _EXFIL_BYTES_THRESHOLD to a single endpoint
+    is exfiltration (T1041) or a staging upload; normal request traffic is
+    kilobytes, not megabytes. Loopback pairs are skipped here (the SQL path
+    has no access to the suppression flag); per-pair cooldown rate-limits.
+    """
+    now = time.time()
+    window_start_iso = (
+        datetime.now(timezone.utc) - timedelta(seconds=_EXFIL_WINDOW_SEC)
+    ).isoformat()
+    try:
+        flows = exfil_volumes(start=window_start_iso)
+    except Exception as exc:
+        logger.warning("Exfil volume aggregation failed: %s", exc)
+        return
+
+    with _exfil_state_lock:
+        for (src_ip, dst_ip), flow in flows.items():
+            if _SCAN_SUPPRESS_LOOPBACK and src_ip.startswith("127.") and dst_ip.startswith("127."):
+                continue
+            total_bytes = flow["bytes"]
+            if total_bytes < _EXFIL_BYTES_THRESHOLD:
+                continue
+            if now - _exfil_alerted.get((src_ip, dst_ip), 0.0) < _EXFIL_COOLDOWN_SEC:
+                continue
+            dst_port = flow.get("port", 0)
+            mb = total_bytes / (1024 * 1024)
+            _emit_capture_alert(
+                "Data exfiltration", "T1041", "critical",
+                "Bulk outbound data transfer (T1041)",
+                f"{mb:.1f} MB transferred from {src_ip} to {dst_ip}:{dst_port} "
+                f"within {_EXFIL_WINDOW_SEC}s (threshold "
+                f"{_EXFIL_BYTES_THRESHOLD // (1024 * 1024)} MB; packet capture).",
+                src_ip, dst_ip,
+            )
+            _exfil_alerted[(src_ip, dst_ip)] = now
+        expired = [k for k, ts in _exfil_alerted.items() if now - ts > _EXFIL_COOLDOWN_SEC * 2]
+        for k in expired:
+            _exfil_alerted.pop(k, None)
+
+
 def _parse_technique_ids(raw) -> list[str]:
     """technique_ids arrives as JSON string or list depending on the store path."""
     if isinstance(raw, str):
@@ -587,7 +788,7 @@ def start_capture_detection() -> None:
         target=_detect_from_capture_loop, daemon=True, name="capture-detection"
     )
     _capture_detect_thread.start()
-    logger.info("Capture detection loop started (port scans + rule matching)")
+    logger.info("Capture detection loop started (scans, brute force, floods, beacons, exfil, rules)")
 
 
 def stop_capture_detection() -> None:

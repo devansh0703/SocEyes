@@ -9,19 +9,36 @@ import { apiFetch } from "../lib/api";
 import { useCachedState, writeCached } from "../lib/client-cache";
 import { useGlobalViewState } from "../lib/view-state";
 
-const items = [
-  { href: "/", label: "Mission", icon: IconRadar },
-  { href: "/dashboard", label: "Command Center", icon: IconLayout },
-  { href: "/logs", label: "Logs", icon: IconScroll },
-  { href: "/alerts", label: "Alerts", icon: IconBell },
-  { href: "/incidents", label: "Incidents", icon: IconShieldAlert },
-  { href: "/audit", label: "Audit", icon: IconClipboardCheck },
-  { href: "/packs", label: "Packs", icon: IconPackage },
-  { href: "/marketplace", label: "Marketplace", icon: IconStore },
-  { href: "/runs", label: "Runs", icon: IconHistory },
-  { href: "/playbooks", label: "Playbooks", icon: IconPlaySquare },
-  { href: "/responses", label: "Responses", icon: IconShieldCheck },
-  { href: "/agents", label: "Agents", icon: IconBot },
+// Grouped sidebar: DETECT / RESPOND / INTEGRATE. Counts are live where a
+// cheap endpoint exists (open alerts), so the operator sees load at a glance.
+const groups: Array<{ label: string; items: Array<{ href: string; label: string; icon: typeof IconRadar; countKey?: "alerts" }> }> = [
+  {
+    label: "Detect",
+    items: [
+      { href: "/", label: "Mission", icon: IconRadar },
+      { href: "/dashboard", label: "Command Center", icon: IconLayout },
+      { href: "/logs", label: "Logs", icon: IconScroll },
+      { href: "/alerts", label: "Alerts", icon: IconBell, countKey: "alerts" },
+      { href: "/incidents", label: "Incidents", icon: IconShieldAlert, countKey: "alerts" },
+    ],
+  },
+  {
+    label: "Respond",
+    items: [
+      { href: "/responses", label: "Responses", icon: IconShieldCheck },
+      { href: "/audit", label: "Audit", icon: IconClipboardCheck },
+      { href: "/playbooks", label: "Playbooks", icon: IconPlaySquare },
+      { href: "/agents", label: "Agents", icon: IconBot },
+    ],
+  },
+  {
+    label: "Integrate",
+    items: [
+      { href: "/packs", label: "Packs", icon: IconPackage },
+      { href: "/marketplace", label: "Marketplace", icon: IconStore },
+      { href: "/runs", label: "Runs", icon: IconHistory },
+    ],
+  },
 ];
 
 type RunState = {
@@ -55,6 +72,7 @@ export function Nav() {
   const [viewState, setViewState] = useGlobalViewState();
   const [runState, setRunState] = useCachedState<RunState>("fda-cache:run-current", { active: false });
   const [history, setHistory] = useCachedState<RunState[]>("fda-cache:run-history", []);
+  const [alertCount, setAlertCount] = useState<number | null>(null);
   const autoStartInFlight = useRef(false);
   const lastAutoStartAttemptMs = useRef(0);
   const [fromDate, setFromDate] = useState("");
@@ -112,6 +130,21 @@ export function Nav() {
     return () => clearInterval(interval);
   }, []);
 
+  // Live open-alert count for the sidebar badges.
+  useEffect(() => {
+    let active = true;
+    const load = async () => {
+      const payload = await apiFetch<{ items?: unknown[] }>("/api/alerts/live?limit=1").catch(() => null);
+      if (!active || !payload) return;
+      const total = (payload as { total?: number; count?: number }).total
+        ?? (payload as { count?: number }).count;
+      setAlertCount(typeof total === "number" ? total : null);
+    };
+    load();
+    const interval = setInterval(load, 10000);
+    return () => { active = false; clearInterval(interval); };
+  }, []);
+
   const runOptions = useMemo(() => {
     const map = new Map<string, RunState>();
     if (runState.active && runState.run_id) {
@@ -127,101 +160,97 @@ export function Nav() {
 
   return (
     <aside className="sidebar">
-      <div className="sidebar-brand">
-        <div className="sidebar-mark" />
-        <div>
-          <div className="sidebar-title">FDA Cyber Control</div>
-          <div className="sidebar-subtitle">Detection &amp; response console</div>
-        </div>
-      </div>
       <nav className="sidebar-nav">
-        {items.map((item) => {
-          const Icon = item.icon;
-          const active = pathname === item.href;
-          return (
-            <Link key={item.href} href={item.href} className={`sidebar-link ${active ? "active" : ""}`}>
-              <Icon size={18} />
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
+        {groups.map((group) => (
+          <div key={group.label} className="sidebar-group">
+            <div className="sidebar-group-label">{group.label}</div>
+            {group.items.map((item) => {
+              const Icon = item.icon;
+              const active = pathname === item.href;
+              const count = item.countKey === "alerts" ? alertCount : null;
+              return (
+                <Link key={item.href} href={item.href} className={`sidebar-link ${active ? "active" : ""}`}>
+                  <Icon size={16} />
+                  <span>{item.label}</span>
+                  {count !== null && count > 0 ? <span className="link-count">{count > 99 ? "99+" : count}</span> : null}
+                </Link>
+              );
+            })}
+          </div>
+        ))}
       </nav>
 
-      <div className="sidebar-control panel-soft">
-        <div className="sidebar-control-title">Date and time filter</div>
-        <label className="sidebar-label">
-          From date
-          <input
-            type="date"
-            value={fromDate}
-            onChange={(event) => {
-              const date = event.target.value;
-              setFromDate(date);
-              setViewState({ ...viewState, preset: "", start: combineDateTime(date, fromTime), end: combineDateTime(toDate, toTime) });
-            }}
-          />
-        </label>
-        <label className="sidebar-label">
-          From time
-          <input
-            type="time"
-            value={fromTime}
-            onChange={(event) => {
-              const time = event.target.value;
-              setFromTime(time);
-              setViewState({ ...viewState, preset: "", start: combineDateTime(fromDate, time), end: combineDateTime(toDate, toTime) });
-            }}
-          />
-        </label>
-        <label className="sidebar-label">
-          To date
-          <input
-            type="date"
-            value={toDate}
-            onChange={(event) => {
-              const date = event.target.value;
-              setToDate(date);
-              setViewState({ ...viewState, preset: "", start: combineDateTime(fromDate, fromTime), end: combineDateTime(date, toTime) });
-            }}
-          />
-        </label>
-        <label className="sidebar-label">
-          To time
-          <input
-            type="time"
-            value={toTime}
-            onChange={(event) => {
-              const time = event.target.value;
-              setToTime(time);
-              setViewState({ ...viewState, preset: "", start: combineDateTime(fromDate, fromTime), end: combineDateTime(toDate, time) });
-            }}
-          />
-        </label>
-      </div>
-
-      <div className="sidebar-control panel-soft">
-        <div className="sidebar-control-title">Run context</div>
-        <div className="sidebar-run-state">{runState.active ? `Active: ${runState.name || runState.run_id}` : "No active run"}</div>
-        <p className="sidebar-subtitle">Live session auto-starts when the app opens.</p>
-        <label className="sidebar-label">
-          Selected run
-          <select
-            value={viewState.selectedRunId}
-            onChange={(event) => setViewState({ ...viewState, selectedRunId: event.target.value })}
-          >
-            <option value="">All runs</option>
-            {runOptions.map((run) => (
-              <option key={run.run_id} value={run.run_id}>
-                {run.run_id} {run.saved ? "(saved)" : ""}
-              </option>
-            ))}
-          </select>
-        </label>
-      </div>
-
       <div className="sidebar-foot">
-        <div className="chip accent">Live</div>
-        <p>Detections, playbooks, agent steps, and response previews.</p>
+        <div className="sidebar-control panel-soft">
+          <div className="sidebar-control-title">Time filter</div>
+          <label className="sidebar-label">
+            From
+            <input
+              type="date"
+              value={fromDate}
+              onChange={(event) => {
+                const date = event.target.value;
+                setFromDate(date);
+                setViewState({ ...viewState, preset: "", start: combineDateTime(date, fromTime), end: combineDateTime(toDate, toTime) });
+              }}
+            />
+          </label>
+          <label className="sidebar-label">
+            From time
+            <input
+              type="time"
+              value={fromTime}
+              onChange={(event) => {
+                const time = event.target.value;
+                setFromTime(time);
+                setViewState({ ...viewState, preset: "", start: combineDateTime(fromDate, time), end: combineDateTime(toDate, toTime) });
+              }}
+            />
+          </label>
+          <label className="sidebar-label">
+            To
+            <input
+              type="date"
+              value={toDate}
+              onChange={(event) => {
+                const date = event.target.value;
+                setToDate(date);
+                setViewState({ ...viewState, preset: "", start: combineDateTime(fromDate, fromTime), end: combineDateTime(date, toTime) });
+              }}
+            />
+          </label>
+          <label className="sidebar-label">
+            To time
+            <input
+              type="time"
+              value={toTime}
+              onChange={(event) => {
+                const time = event.target.value;
+                setToTime(time);
+                setViewState({ ...viewState, preset: "", start: combineDateTime(fromDate, fromTime), end: combineDateTime(toDate, time) });
+              }}
+            />
+          </label>
+        </div>
+
+        <div className="sidebar-control panel-soft" style={{ marginTop: 10 }}>
+          <div className="sidebar-control-title">Run context</div>
+          <div className="sidebar-run-state">{runState.active ? `Active: ${runState.name || runState.run_id}` : "No active run"}</div>
+          <label className="sidebar-label">
+            Selected run
+            <select
+              value={viewState.selectedRunId}
+              onChange={(event) => setViewState({ ...viewState, selectedRunId: event.target.value })}
+            >
+              <option value="">All runs</option>
+              {runOptions.map((run) => (
+                <option key={run.run_id} value={run.run_id}>
+                  {run.run_id} {run.saved ? "(saved)" : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
     </aside>
   );

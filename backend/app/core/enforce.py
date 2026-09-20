@@ -349,6 +349,60 @@ def _validate_ip(ip: str) -> bool:
         return False
 
 
+_self_ip_cache: set[str] | None = None
+
+
+def _local_ips() -> set[str]:
+    """Every IPv4 address configured on this machine's interfaces.
+
+    getaddrinfo(hostname) only resolves /etc/hosts entries — it misses
+    bridge IPs like docker0's 172.17.0.1. SIOCGIFCONF enumerates the real
+    interface addresses from the kernel; plus the loopback range.
+    """
+    global _self_ip_cache
+    if _self_ip_cache is not None:
+        return _self_ip_cache
+    addrs: set[str] = {"127.0.0.1"}
+    try:
+        import array
+        import fcntl
+        import socket
+        import struct
+
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        buf = array.array("B", b"\0" * 8192)
+        result = fcntl.ioctl(
+            s.fileno(), 0x8912,  # SIOCGIFCONF
+            struct.pack("iL", 8192, buf.buffer_info()[0]),
+        )
+        outbytes = struct.unpack("iL", result)[0]
+        raw = buf.tobytes()
+        for off in range(0, outbytes, 40):
+            addrs.add(socket.inet_ntoa(raw[off + 20 : off + 24]))
+    except Exception as exc:  # pragma: no cover - non-Linux fallback
+        logger.debug("SIOCGIFCONF enumeration failed: %s", exc)
+    _self_ip_cache = addrs
+    return addrs
+
+
+def _is_self_ip(ip: str) -> bool:
+    """True when ``ip`` is one of this machine's own addresses.
+
+    Last line of defense against self-inflicted blackout: blocking the
+    local host takes the API (and the rollback sweeper) down with it.
+    The response engine should never auto-block the console itself.
+    """
+    if not ip:
+        return False
+    try:
+        candidate = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    if candidate.is_loopback:
+        return True
+    return str(candidate) in _local_ips()
+
+
 # ---------------------------------------------------------------------------
 # Set-based containment (block / isolate / egress)
 # ---------------------------------------------------------------------------
@@ -360,6 +414,15 @@ def _enforce_set_element(
     policy: EnforcementPolicy,
 ) -> EnforcementResult:
     """Contain ``ip`` by adding a timeout element to a set. Kernel TTL rolls back."""
+    if _is_self_ip(ip):
+        logger.warning("Refusing to enforce %s against this host itself (%s)", action, ip)
+        return EnforcementResult(
+            success=False,
+            action=action,
+            rule_id=policy.rule_id,
+            error=f"Refusing to {action} the local host ({ip}) — self-protection",
+            timestamp=_now_iso(),
+        )
     if not _ensure_nftables_setup():
         return EnforcementResult(
             success=False,

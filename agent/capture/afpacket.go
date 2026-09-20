@@ -39,13 +39,15 @@ type TCPHeader struct {
 
 // Packet represents a fully decoded network packet.
 type Packet struct {
-	SrcIP     string
-	DstIP     string
-	SrcPort   int
-	DstPort   int
-	Protocol  string
-	TCPFlags  int    // TCP header flags (0x02 SYN, 0x12 SYN-ACK, ...); 0 for non-TCP
-	Timestamp int64
+	SrcIP      string
+	DstIP      string
+	SrcPort    int
+	DstPort    int
+	Protocol   string
+	TCPFlags   int    // TCP header flags (0x02 SYN, 0x12 SYN-ACK, ...); 0 for non-TCP
+	FrameLen   int    // captured wire length of the whole frame
+	PayloadLen int    // TCP payload bytes (IP total length minus headers); 0 when unknown
+	Timestamp  int64
 }
 
 // DecodeEthernetFrame parses an Ethernet II frame.
@@ -121,6 +123,14 @@ func DecodePacket(packet []byte) (*Packet, error) {
 		return nil, nil
 	}
 
+	// Wire size of the IP datagram: the frame may carry Ethernet padding,
+	// so the authoritative length is the IP header's own total-length field.
+	ipTotalLen := int(ip.Length)
+	frameLen := len(packet)
+	if ipTotalLen >= 20 && ipTotalLen+14 <= len(packet) {
+		frameLen = ipTotalLen + 14
+	}
+
 	// For TCP, decode ports; for ICMP/other, ports are zero
 	if proto == "tcp" {
 		tcp, err := DecodeTCPHeader(eth.Payload[ipHeaderLen:])
@@ -129,15 +139,22 @@ func DecodePacket(packet []byte) (*Packet, error) {
 				SrcIP:    ip.SrcIP.String(),
 				DstIP:    ip.DstIP.String(),
 				Protocol: proto,
+				FrameLen: frameLen,
 			}, nil
 		}
+		payloadLen := ipTotalLen - ipHeaderLen - tcp.DataOffset*4
+		if payloadLen < 0 {
+			payloadLen = 0
+		}
 		return &Packet{
-			SrcIP:    ip.SrcIP.String(),
-			DstIP:    ip.DstIP.String(),
-			SrcPort:  tcp.SrcPort,
-			DstPort:  tcp.DstPort,
-			Protocol: proto,
-			TCPFlags: tcp.Flags,
+			SrcIP:      ip.SrcIP.String(),
+			DstIP:      ip.DstIP.String(),
+			SrcPort:    tcp.SrcPort,
+			DstPort:    tcp.DstPort,
+			Protocol:   proto,
+			TCPFlags:   tcp.Flags,
+			FrameLen:   frameLen,
+			PayloadLen: payloadLen,
 		}, nil
 	}
 
@@ -145,5 +162,6 @@ func DecodePacket(packet []byte) (*Packet, error) {
 		SrcIP:    ip.SrcIP.String(),
 		DstIP:    ip.DstIP.String(),
 		Protocol: proto,
+		FrameLen: frameLen,
 	}, nil
 }

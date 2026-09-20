@@ -102,9 +102,57 @@
   "Port scan reconnaissance (T1046)" in 4 seconds, visible in
   /api/alerts/live with response preview attached.
 
-## P8 (Deferred)
+## P8 (Detectors + enforcement verification + UI v3 2026-09-21) — ALL COMPLETE
+
+- [x] Two new detectors: C2 beaconing (interval-regularity over 60s, T1071)
+      and data exfiltration (SQL SUM(frame_len) per flow vs 100MB threshold,
+      T1041) — backend/app/services/capture_detection.py
+- [x] Agent emits frame_len + payload_len; store has numeric columns +
+      store_event params (agent/capture/afpacket.go, agent/main.go,
+      app_shared/unified_store.py)
+- [x] Exfil volume aggregation is SQL-side (exfil_volumes) — Python-side
+      sums of the newest N events undercount bursts (150MB transfer read as
+      24MB)
+- [x] Agent burst survival: eventCh 1000 -> 8192, shipper flushes at
+      max-batch (500) instead of per-10 events — 150MB+ bursts no longer
+      drop 80%+ of packets
+- [x] Scan detector SYN-only + self-IP guard (was counting host RST
+      replies as probes — nearly self-blocked the host)
+- [x] enforce.py refuses to enforce against the machine's own interface
+      IPs (SIOCGIFCONF) as the last line of defense
+- [x] LIVE-FIRE VERIFIED (real docker traffic): port scan T1046, SSH
+      brute force T1110, SYN flood T1498, C2 beaconing T1071 (jitter 0.00),
+      exfil T1041 (129.5MB detected); LLM triage true_positive 0.95 ->
+      block_egress auto-executed; packet drop + kernel TTL rollback proven;
+      audit trail complete
+- [x] UI v3 "flight deck": self-hosted variable Archivo + JetBrains Mono,
+      graphite tokens, ECAM-style top status bar (capture/queue/engines/
+      orchestrator + AUTO-RESPONSE ARMED pill), grouped sidebar (DETECT /
+      RESPOND / INTEGRATE) with live counts, dense data tables, severity as
+      the only loud color — frontend/app/globals.css, components/top-bar.tsx,
+      components/nav.tsx rebuilt; Mission page is an ops briefing with live
+      state (no marketing hero); Dashboard is a KPI strip (sparklines,
+      trend deltas) + volume timeline + severity donut + top talkers +
+      alert stream with AI verdict column
+- [x] recharts animation off on every primitive (charts render final state
+      in headless captures and don't re-animate on the 5s poll)
+- [x] ES-style relative times (now-5h) resolved for the SQLite fallback in
+      _build_where + search_alerts — the sidebar time filter used to
+      silently return zero rows whenever Elasticsearch was down
+- [x] /api/logs/analytics + dashboard payloads now carry source_indices
+      (Logs page crashed on undefined)
+- [x] pack-item / rule-row styles restored (Packs page rows were unstyled
+      with overlapping text)
+- [x] next.config: rewrites target FDA_PORT (was hardcoded 8123),
+      outputFileTracingRoot set (workspace-root warning)
+- [x] Fresh screenshots of all 13 views captured from live data
+      (screenshots/)
+
+## P9 (Deferred)
 
 - [ ] fda CLI python_bin() falls back to .venv-tools (no uvicorn) when .venv-fda is missing — prefer system python3 in fallback order
+- [ ] API launch is a hand-rolled root process (setsid + /tmp/fda-api-env.txt);
+      make it a proper systemd unit
 
 ## Verification
 
@@ -120,3 +168,7 @@
 - Detection live-fire 2026-09-20: real port scan -> alert in 4s; 4-engine
   rule catalog fully indexed (sigma 3,110 / elastic 1,764 / panther 1,024 /
   wazuh 147 XML rules)
+- P8 2026-09-21: 83 Python tests passing; 5/5 detectors verified with real
+  attack traffic; auto-response chain verified end-to-end (LLM triage ->
+  nft block -> packet drop -> TTL rollback -> audit); all 13 views
+  screenshot-verified against live data

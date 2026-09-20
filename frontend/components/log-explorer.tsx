@@ -205,7 +205,7 @@ export function LogExplorer() {
               <XAxis dataKey="time" hide />
               <YAxis stroke="#60a5fa" />
               <Tooltip />
-              <Area dataKey="count" stroke="#2563eb" fill="url(#logsTimelineFill)" strokeWidth={2} />
+              <Area isAnimationActive={false} dataKey="count" stroke="#2563eb" fill="url(#logsTimelineFill)" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
@@ -222,8 +222,8 @@ export function LogExplorer() {
               <XAxis dataKey="label" stroke="#60a5fa" />
               <YAxis stroke="#60a5fa" />
               <Tooltip />
-              <Area dataKey="events" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.2} />
-              <Line dataKey="protocols" stroke="#60a5fa" strokeWidth={2} />
+              <Area isAnimationActive={false} dataKey="events" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.2} />
+              <Line isAnimationActive={false} dataKey="protocols" stroke="#60a5fa" strokeWidth={2} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -236,8 +236,8 @@ export function LogExplorer() {
               <XAxis dataKey="label" stroke="#60a5fa" />
               <YAxis stroke="#60a5fa" />
               <Tooltip />
-              <Area dataKey="value" stroke="#93c5fd" fill="#93c5fd" fillOpacity={0.16} />
-              <Line dataKey="value" stroke="#0a0f29" dot={false} />
+              <Area isAnimationActive={false} dataKey="value" stroke="#93c5fd" fill="#93c5fd" fillOpacity={0.16} />
+              <Line isAnimationActive={false} dataKey="value" stroke="#0a0f29" dot={false} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -250,8 +250,8 @@ export function LogExplorer() {
               <XAxis dataKey="label" stroke="#60a5fa" />
               <YAxis stroke="#60a5fa" />
               <Tooltip />
-              <Area dataKey="value" stroke="#60a5fa" fill="#60a5fa" fillOpacity={0.18} />
-              <Line dataKey="value" stroke="#0a0f29" dot={{ r: 2 }} />
+              <Area isAnimationActive={false} dataKey="value" stroke="#60a5fa" fill="#60a5fa" fillOpacity={0.18} />
+              <Line isAnimationActive={false} dataKey="value" stroke="#0a0f29" dot={{ r: 2 }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>

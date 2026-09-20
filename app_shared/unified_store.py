@@ -133,7 +133,9 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
             technique_ids TEXT,
             run_id    TEXT,
             raw       TEXT,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            frame_len INTEGER,
+            payload_len INTEGER
         );
         CREATE INDEX IF NOT EXISTS idx_events_ts      ON events(timestamp);
         CREATE INDEX IF NOT EXISTS idx_events_source  ON events(source);
@@ -192,6 +194,11 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
         );
         """
     )
+    # Lightweight migrations: agent wire-size columns added after first ship.
+    _cols = {row[1] for row in conn.execute("PRAGMA table_info(events)")}
+    for _new_col in ("frame_len", "payload_len"):
+        if _new_col not in _cols:
+            conn.execute(f"ALTER TABLE events ADD COLUMN {_new_col} INTEGER")
     conn.commit()
     with _lock:
         _sqlite_conn = conn
@@ -207,6 +214,16 @@ def get_conn() -> sqlite3.Connection:
 
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+def _int_or_none(value) -> int | None:
+    """Coerce to int for the numeric columns; None (NULL) when absent/garbage."""
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _compress_raw(raw_json: str) -> bytes:
@@ -300,6 +317,8 @@ def store_event(
     run_id: str | None = None,
     timestamp: str | None = None,
     raw: dict[str, Any] | None = None,
+    frame_len: int | None = None,
+    payload_len: int | None = None,
 ) -> str:
     """Insert a single event into ES (if available), otherwise SQLite."""
     import json as _json
@@ -390,15 +409,15 @@ def store_event(
                 engine, title, message, rule_id, host_name, user_name,
                 source_ip, destination_ip, destination_port, network_transport,
                 suricata_event_type, process_name, process_command_line,
-                technique_ids, run_id, raw, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                technique_ids, run_id, raw, created_at, frame_len, payload_len)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 event_id, source, index_name, ts, sev_label, engine, title, message,
                 rule_id, host_name, user_name, source_ip, destination_ip,
                 destination_port, network_transport, suricata_event_type,
                 process_name, process_command_line, technique_json, run_id,
-                raw_b64, _now_iso(),
+                raw_b64, _now_iso(), _int_or_none(frame_len), _int_or_none(payload_len),
             ),
         )
         conn.commit()
@@ -429,11 +448,13 @@ def store_events_batch(events: list[dict[str, Any]]) -> list[str]:
         sev_label = sev.get("label", "medium") if isinstance(sev, dict) else str(sev)
         tech_json = _json.dumps(ev.get("technique_ids") or [])
         # Preserve agent-supplied top-level fields the fixed schema has no
-        # column for (tcp_flags today, more later) inside raw so they survive.
+        # column for (TCP flags, wire sizes) inside raw so they survive.
         _raw_obj = dict(ev.get("raw") or {})
-        for _k in ("tcp_flags",):
+        for _k in ("tcp_flags", "frame_len", "payload_len"):
             if ev.get(_k) is not None:
                 _raw_obj[_k] = ev[_k]
+        ev_frame_len = ev.get("frame_len")
+        ev_payload_len = ev.get("payload_len")
         raw_json = _json.dumps(_raw_obj)
         raw_compressed = _compress_raw(raw_json)
         import base64
@@ -462,6 +483,8 @@ def store_events_batch(events: list[dict[str, Any]]) -> list[str]:
             ev.get("run_id"),
             raw_b64,
             now,
+            _int_or_none(ev.get("frame_len")),
+            _int_or_none(ev.get("payload_len")),
         ))
         ids.append(eid)
     with _lock:
@@ -473,8 +496,8 @@ def store_events_batch(events: list[dict[str, Any]]) -> list[str]:
                 engine, title, message, rule_id, host_name, user_name,
                 source_ip, destination_ip, destination_port, network_transport,
                 suricata_event_type, process_name, process_command_line,
-                technique_ids, run_id, raw, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                technique_ids, run_id, raw, created_at, frame_len, payload_len)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             rows,
         )
@@ -582,6 +605,28 @@ def _source_indices(sources: list[str] | None) -> list[str]:
     return [_SOURCE_INDEX_MAP.get(s, s) for s in sources]
 
 
+def _resolve_relative_time(value: str) -> str:
+    """Resolve Elasticsearch-style relative times (``now-5h``, ``now-15m``) to ISO.
+
+    The frontend time filter sends ES-style expressions. Elasticsearch can read
+    them directly, but the SQLite fallback stores plain ISO timestamps and
+    would otherwise compare against the literal string ``now-5h`` — silently
+    matching nothing. Resolve those here so both backends see the same window.
+    """
+    import re as _re
+
+    if not isinstance(value, str):
+        return value
+    m = _re.fullmatch(r"now(?:-([\d]+)([smhd]))?", value.strip())
+    if not m:
+        return value
+    delta = timedelta(0)
+    if m.group(1):
+        unit_secs = {"s": 1, "m": 60, "h": 3600, "d": 86400}[m.group(2)]
+        delta = timedelta(seconds=int(m.group(1)) * unit_secs)
+    return (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def _build_where(
     start: str | None,
     end: str | None,
@@ -600,10 +645,10 @@ def _build_where(
     args: list = []
     if start:
         clauses.append("timestamp >= ?")
-        args.append(start)
+        args.append(_resolve_relative_time(start))
     if end:
         clauses.append("timestamp <= ?")
-        args.append(end)
+        args.append(_resolve_relative_time(end))
     if run_id:
         clauses.append("run_id = ?")
         args.append(run_id)
@@ -754,14 +799,56 @@ def query_events(
             ).lower()
             if query.lower() not in text:
                 continue
-        # Flatten agent TCP flags: stored inside raw JSON by the capture agent,
-        # surfaced top-level so detectors can filter SYN-only probes.
-        if not doc.get("tcp_flags"):
+        # Flatten agent TCP flags + packet sizes: stored inside raw JSON by
+        # the capture agent, surfaced top-level so detectors can filter
+        # SYN-only probes and sum wire volume.
+        if not doc.get("tcp_flags") or not doc.get("frame_len"):
             raw = doc.get("raw")
-            if isinstance(raw, dict) and raw.get("tcp_flags") is not None:
-                doc["tcp_flags"] = raw.get("tcp_flags")
+            if isinstance(raw, dict):
+                for size_key in ("tcp_flags", "frame_len", "payload_len"):
+                    if not doc.get(size_key) and raw.get(size_key) is not None:
+                        doc[size_key] = raw.get(size_key)
         events.append(doc)
     return events
+
+
+def exfil_volumes(
+    start: str,
+    end: str | None = None,
+) -> dict[tuple[str, str], dict]:
+    """Aggregate captured wire bytes per (source, destination) flow via SQL.
+
+    Exfil detection needs TRUE volume totals — a 150 MB transfer is 100k+",
+    packets, far past the event-read limit, so Python-side summing of the
+    newest N events undercounts. SQLite does the whole-window SUM in one
+    indexed range scan. Returns {(src, dst): {"bytes": n, "port": p}}.
+    """
+    conn = get_conn()
+    if end:
+        rows = conn.execute(
+            "SELECT source_ip, destination_ip, SUM(COALESCE(frame_len, 0)) AS total, "
+            "MAX(destination_port) AS port "
+            "FROM events WHERE source = 'capture' AND timestamp >= ? AND timestamp <= ? "
+            "AND frame_len IS NOT NULL "
+            "GROUP BY source_ip, destination_ip",
+            (start, end),
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            "SELECT source_ip, destination_ip, SUM(COALESCE(frame_len, 0)) AS total, "
+            "MAX(destination_port) AS port "
+            "FROM events WHERE source = 'capture' AND timestamp >= ? "
+            "AND frame_len IS NOT NULL "
+            "GROUP BY source_ip, destination_ip",
+            (start,),
+        ).fetchall()
+    out: dict[tuple[str, str], dict] = {}
+    for row in rows:
+        src, dst, total, port = row[0], row[1], row[2] or 0, row[3] or 0
+        if not src or not dst:
+            continue
+        out[(src, dst)] = {"bytes": int(total), "port": int(port)}
+    return out
 
 
 def count_events(
@@ -918,9 +1005,9 @@ def search_alerts(
     clauses: list[str] = ["1=1"]
     a: list = []
     if start:
-        clauses.append("timestamp >= ?"); a.append(start)
+        clauses.append("timestamp >= ?"); a.append(_resolve_relative_time(start))
     if end:
-        clauses.append("timestamp <= ?"); a.append(end)
+        clauses.append("timestamp <= ?"); a.append(_resolve_relative_time(end))
     if run_id:
         clauses.append("run_id = ?"); a.append(run_id)
     with _lock:
@@ -1006,6 +1093,7 @@ def get_analytics_summary(
                     "sources": {"terms": {"field": "source.ip", "size": 6}},
                     "destinations": {"terms": {"field": "destination.ip", "size": 6}},
                     "ports": {"terms": {"field": "destination.port", "size": 8}},
+                    "indices": {"terms": {"field": "_index", "size": 8}},
                 },
             }
 
@@ -1059,6 +1147,10 @@ def get_analytics_summary(
                 "top_destinations": [
                     {"label": b.get("key") or "unknown", "value": b.get("doc_count", 0)}
                     for b in ((sev_aggs.get("destinations") or {}).get("buckets") or [])
+                ],
+                "source_indices": [
+                    {"label": b.get("key") or "unknown", "value": b.get("doc_count", 0)}
+                    for b in ((sev_aggs.get("indices") or {}).get("buckets") or [])
                 ],
                 "top_ports": [],
                 "agent_run_mix": [],
@@ -1133,6 +1225,12 @@ def get_analytics_summary(
         ).fetchall()
         top_destinations = [{"label": r["destination_ip"], "value": r["count"]} for r in top_dests]
 
+        idx_rows = conn.execute(
+            f"SELECT index_name AS label, COUNT(*) as count FROM events WHERE {where} GROUP BY index_name ORDER BY count DESC LIMIT 8",
+            args,
+        ).fetchall()
+        source_indices = [{"label": r["label"], "value": r["count"]} for r in idx_rows]
+
         event_types = conn.execute(
             "SELECT suricata_event_type, COUNT(*) as count FROM events WHERE source='suricata' AND suricata_event_type IS NOT NULL GROUP BY suricata_event_type ORDER BY count DESC LIMIT 8"
         ).fetchall()
@@ -1188,6 +1286,7 @@ def get_analytics_summary(
             "agent_run_mix": agent_run_mix_list,
             "top_usernames": top_usernames,
             "network_transports": network_transports,
+            "source_indices": source_indices,
         },
     }
 

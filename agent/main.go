@@ -115,7 +115,14 @@ func (s *bufferedShipper) add(payload []byte) {
 	s.pending = append(s.pending, payload)
 }
 
-// flushPOST drains up to len(batch) events into one POST. Returns the
+// maxPostEvents caps events per HTTP POST. A 150 MB exfil burst produces
+// tens of thousands of packets per second; one POST per 10 events cannot
+// keep up, the capture channel overflows, and the volume evidence the
+// exfiltration detector needs never reaches the server. Larger batches
+// during backlog keep ingestion lossless at burst rates.
+const maxPostEvents = 500
+
+// flushPOST drains up to maxPostEvents events into one POST. Returns the
 // number successfully sent and an error if the batch failed.
 func (s *bufferedShipper) flushPOST() (int, error) {
 	s.mu.Lock()
@@ -123,6 +130,9 @@ func (s *bufferedShipper) flushPOST() (int, error) {
 	if n == 0 {
 		s.mu.Unlock()
 		return 0, nil
+	}
+	if n > maxPostEvents {
+		n = maxPostEvents
 	}
 	batch := s.pending[:n]
 	body := marshalBatch(batch)
@@ -203,8 +213,9 @@ func main() {
 		cancel()
 	}()
 
-	// Event channel
-	eventCh := make(chan capture.Packet, 1000)
+	// Event channel: 16k slots of headroom so a burst (exfil flood, scan)
+	// rides out a slow POST instead of dropping evidence packets.
+	eventCh := make(chan capture.Packet, 16384)
 	errCh := make(chan error, 10)
 
 	captureCfg := &capture.Config{
@@ -254,7 +265,10 @@ func main() {
 				continue // never feed our own POSTs back into the pipeline
 			}
 			shipper.add(marshalEvent(packetToEvent(pkt, host)))
-			if len(shipper.pending) >= cfg.BatchSize {
+			// Ship only at max-POST size during bursts; the flush ticker
+			// (FDA_AGENT_FLUSH_SECONDS) covers normal-rate traffic. Flushing
+			// per BatchSize stalled receives inside bursts and dropped packets.
+			if len(shipper.pending) >= maxPostEvents {
 				if err := shipper.flush(); err != nil {
 					logIfRateLimited(err, "ingest failed (events kept in buffer)")
 				}
@@ -297,6 +311,8 @@ func packetToEvent(p capture.Packet, host string) map[string]interface{} {
 		"protocol":         p.Protocol,
 		"network_transport": p.Protocol,
 		"tcp_flags":        p.TCPFlags,
+		"frame_len":        p.FrameLen,
+		"payload_len":      p.PayloadLen,
 		"engine":           "agent",
 		"host_name":        host,
 		"technique_ids":    []string{},
