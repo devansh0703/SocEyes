@@ -448,9 +448,10 @@ def store_events_batch(events: list[dict[str, Any]]) -> list[str]:
         sev_label = sev.get("label", "medium") if isinstance(sev, dict) else str(sev)
         tech_json = _json.dumps(ev.get("technique_ids") or [])
         # Preserve agent-supplied top-level fields the fixed schema has no
-        # column for (TCP flags, wire sizes) inside raw so they survive.
+        # column for (TCP flags, wire sizes, packet payload snapshot) inside
+        # raw so they survive. The payload ships base64 from the agent.
         _raw_obj = dict(ev.get("raw") or {})
-        for _k in ("tcp_flags", "frame_len", "payload_len"):
+        for _k in ("tcp_flags", "frame_len", "payload_len", "payload", "source_port"):
             if ev.get(_k) is not None:
                 _raw_obj[_k] = ev[_k]
         ev_frame_len = ev.get("frame_len")

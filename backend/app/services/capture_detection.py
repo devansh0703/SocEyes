@@ -150,6 +150,7 @@ def _detect_from_capture_loop() -> None:
             _detect_syn_flood()
             _detect_c2_beacons()
             _detect_data_exfil()
+            _detect_rule_matches()
             _match_alerts_to_rules()
         except Exception as exc:
             logger.warning("Capture detection error: %s", exc)
@@ -647,6 +648,151 @@ def _load_rule_matches(db_path, ids_alerts, matched_alerts) -> dict[str, list[sq
         conn.close()
 
 
+# --- direct rule-engine phase (every indexed rule evaluated on events) ----
+_RULE_ENGINE_WATERMARK_KEY = "capture_detection.rule_engine_watermark"
+_RULE_ENGINE_BATCH = _env_int("FDA_RULE_ENGINE_BATCH", 200)
+_RULE_ENGINE_MAX_ALERTS_PER_PASS = _env_int("FDA_RULE_ENGINE_MAX_ALERTS", 25)
+_RULE_ENGINE_RELOAD_SEC = _env_int("FDA_RULE_ENGINE_RELOAD_SEC", 300)
+_RULE_ENGINE_ALERT_COOLDOWN = _env_int("FDA_RULE_ENGINE_COOLDOWN_SEC", 900)  # per rule_id
+
+_rule_engine_lock = threading.Lock()
+_rule_engine_catalog = None
+_rule_engine_catalog_loaded_at = 0.0
+_rule_engine_alerted: dict[str, float] = {}
+
+
+def _get_rule_catalog():
+    """Compile the full catalog once, reload every _RULE_ENGINE_RELOAD_SEC."""
+    global _rule_engine_catalog, _rule_engine_catalog_loaded_at
+    now = time.time()
+    with _rule_engine_lock:
+        if _rule_engine_catalog is None or (now - _rule_engine_catalog_loaded_at) > _RULE_ENGINE_RELOAD_SEC:
+            try:
+                from app_shared.rule_engine import load_catalog_from_store
+                _rule_engine_catalog = load_catalog_from_store()
+                _rule_engine_catalog_loaded_at = now
+                logger.info(
+                    "Rule engine compiled: %d matchers (%s); skipped: %s",
+                    len(_rule_engine_catalog.matchers),
+                    ", ".join(f"{k} {v}" for k, v in sorted(_rule_engine_catalog.by_engine.items())),
+                    ", ".join(f"{k} {v}" for k, v in sorted(_rule_engine_catalog.skip_by_engine.items())) or "none",
+                )
+            except Exception as exc:
+                logger.warning("Rule engine compilation failed: %s", exc)
+                _rule_engine_catalog = None if _rule_engine_catalog is None else _rule_engine_catalog
+        return _rule_engine_catalog
+
+
+def _detect_rule_matches() -> None:
+    """Evaluate every compiled platform rule against the newest events.
+
+    This is the piece that makes the 7k-rule catalog an engine instead of a
+    library: an incoming event satisfying ANY indexed rule's logic fires
+    that rule_id as an alert, with AI-triage + response preview attached by
+    the existing response pipeline. Watermarked exactly like the other
+    phases; per-rule cooldown keeps one noisy rule from flooding.
+    """
+    catalog = _get_rule_catalog()
+    if catalog is None or not catalog.matchers:
+        return
+
+    watermark = str(get_kv(_RULE_ENGINE_WATERMARK_KEY, "") or "")
+    docs = query_events(sources=["capture"], start=watermark or None, limit=_RULE_ENGINE_BATCH)
+    if not docs:
+        return
+    if watermark:
+        docs = [d for d in docs if str(d.get("timestamp", "")) > watermark]
+    if not docs:
+        return
+    # Oldest-first so the watermark can only move forward over fully
+    # processed events; newest batch tail resumes next pass.
+    docs = sorted(docs, key=lambda d: str(d.get("timestamp", "")))
+
+    max_ts = watermark
+    fired = 0
+    now = time.time()
+
+    try:
+        hits = catalog.evaluate(docs)
+        for ev in docs:
+            ts = str(ev.get("timestamp", ""))
+            if ts > max_ts:
+                max_ts = ts
+
+        # Deduplicate: one alert per (rule_id, source_ip) per cooldown window.
+        seen_pairs: set[tuple[str, str]] = set()
+        for hit in hits:
+            rule_id = hit["rule_id"]
+            src = (hit["event"].get("source_ip") or "") or ""
+            pair = (rule_id, src)
+            if pair in seen_pairs:
+                continue
+            last = _rule_engine_alerted.get(rule_id, 0.0)
+            if now - last < _RULE_ENGINE_ALERT_COOLDOWN:
+                seen_pairs.add(pair)
+                continue
+            if fired >= _RULE_ENGINE_MAX_ALERTS_PER_PASS:
+                break
+            seen_pairs.add(pair)
+
+            ev = hit["event"]
+            source_ip = ev.get("source_ip", "") or ""
+            dest_ip = ev.get("destination_ip", "") or ""
+            dst_port = ev.get("destination_port", "") or ""
+            host_name = ev.get("host_name", "") or ""
+            transport = ev.get("network_transport", "") or ev.get("protocol", "") or ""
+            techs = hit["technique_ids"] or []
+            severity = hit["severity"] if hit["severity"] in ("critical", "high", "medium", "low") else "medium"
+            title = f"{hit['title'] or rule_id} [rule engine]"
+            message = (
+                f"Rule {rule_id} ({hit['engine']}) matched a captured event: "
+                f"{transport} {source_ip} -> {dest_ip}:{dst_port}. {hit['description'][:220]}"
+            )
+
+            store_event(
+                "fda-internal", "fda-detection",
+                engine="rule-engine",
+                title=title,
+                message=message,
+                severity=severity,
+                rule_id=rule_id,
+                source_ip=source_ip,
+                destination_ip=dest_ip,
+                technique_ids=techs,
+            )
+
+            action = choose_action(techs)
+            detail = action_detail(action)
+            preview = {
+                "title": detail["title"],
+                "summary": detail["summary"],
+                "preview_command": render_command_preview(
+                    action,
+                    {"source_ip": source_ip, "destination_ip": dest_ip, "rule_id": rule_id,
+                     "technique_id": techs[0] if techs else "", "host_name": host_name},
+                ),
+                "success_criteria": f"{source_ip or dest_ip or 'target'} is present in the runtime blocklist.",
+            }
+            store_alert(
+                "rule-engine", severity, title,
+                message=message,
+                rule_id=rule_id,
+                source_ip=source_ip,
+                destination_ip=dest_ip,
+                technique_ids=techs,
+                response_preview=preview,
+            )
+            _rule_engine_alerted[rule_id] = now
+            fired += 1
+            logger.info("Rule engine: %s (%s) fired on %s -> %s:%s",
+                        rule_id, hit["engine"], source_ip or "?", dest_ip or "?", dst_port)
+
+        if max_ts and max_ts != watermark:
+            set_kv(_RULE_ENGINE_WATERMARK_KEY, max_ts)
+    except Exception as exc:
+        logger.warning("Rule engine evaluation error: %s", exc)
+
+
 def _match_alerts_to_rules() -> None:
     """Match recent IDS alerts against the indexed detection-rule catalog.
 
@@ -788,7 +934,7 @@ def start_capture_detection() -> None:
         target=_detect_from_capture_loop, daemon=True, name="capture-detection"
     )
     _capture_detect_thread.start()
-    logger.info("Capture detection loop started (scans, brute force, floods, beacons, exfil, rules)")
+    logger.info("Capture detection loop started (scans, brute force, floods, beacons, exfil, rule engine)")
 
 
 def stop_capture_detection() -> None:

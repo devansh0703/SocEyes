@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -298,26 +299,33 @@ func marshalEvent(ev map[string]interface{}) []byte {
 // packetToEvent converts a capture.Packet to a JSON-serializable map.
 // source stays "capture" — that is the logical source the server's
 // port-scan detector queries; index_name carries the wire index.
+// Transport payload is base64-shipped (capped by PayloadSnapBytes) so
+// server-side content rules can match on packet contents.
 func packetToEvent(p capture.Packet, host string) map[string]interface{} {
+	payloadB64 := ""
+	if len(p.Payload) > 0 {
+		payloadB64 = base64.StdEncoding.EncodeToString(p.Payload)
+	}
 	return map[string]interface{}{
-		"source":           "capture",
-		"index_name":       "fda-agent-capture",
-		"title":            fmt.Sprintf("%s -> %s", p.SrcIP, p.DstIP),
-		"severity":         "medium",
-		"source_ip":        p.SrcIP,
-		"destination_ip":   p.DstIP,
-		"source_port":      p.SrcPort,
-		"destination_port": p.DstPort,
-		"protocol":         p.Protocol,
+		"source":            "capture",
+		"index_name":        "fda-agent-capture",
+		"title":             fmt.Sprintf("%s -> %s", p.SrcIP, p.DstIP),
+		"severity":          "medium",
+		"source_ip":         p.SrcIP,
+		"destination_ip":    p.DstIP,
+		"source_port":       p.SrcPort,
+		"destination_port":  p.DstPort,
+		"protocol":          p.Protocol,
 		"network_transport": p.Protocol,
-		"tcp_flags":        p.TCPFlags,
-		"frame_len":        p.FrameLen,
-		"payload_len":      p.PayloadLen,
-		"engine":           "agent",
-		"host_name":        host,
-		"technique_ids":    []string{},
-		"raw":              map[string]interface{}{"captured": true},
-		"timestamp":        time.Now().UTC().Format(time.RFC3339Nano),
+		"tcp_flags":         p.TCPFlags,
+		"frame_len":         p.FrameLen,
+		"payload_len":       p.PayloadLen,
+		"payload":           payloadB64,
+		"engine":            "agent",
+		"host_name":         host,
+		"technique_ids":     []string{},
+		"raw":               map[string]interface{}{"captured": true},
+		"timestamp":         time.Now().UTC().Format(time.RFC3339Nano),
 	}
 }
 

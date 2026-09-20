@@ -13,6 +13,14 @@ type EthernetFrame struct {
 	Payload   []byte
 }
 
+// UDPHeader represents a parsed UDP header.
+type UDPHeader struct {
+	SrcPort int
+	DstPort int
+	Length  int
+	Payload []byte
+}
+
 // IPv4Header represents a parsed IPv4 header.
 type IPv4Header struct {
 	Version   int
@@ -46,9 +54,15 @@ type Packet struct {
 	Protocol   string
 	TCPFlags   int    // TCP header flags (0x02 SYN, 0x12 SYN-ACK, ...); 0 for non-TCP
 	FrameLen   int    // captured wire length of the whole frame
-	PayloadLen int    // TCP payload bytes (IP total length minus headers); 0 when unknown
+	PayloadLen int    // transport payload bytes (TCP/UDP); 0 when unknown
+	Payload    []byte // first PayloadSnapBytes of the transport payload (content matching)
 	Timestamp  int64
 }
+
+// PayloadSnapBytes caps how much transport payload is kept per packet for
+// content-based rule matching. IDS content rules key on protocol banners,
+// command strings, and user agents — all appear in the first hundred bytes.
+const PayloadSnapBytes = 512
 
 // DecodeEthernetFrame parses an Ethernet II frame.
 func DecodeEthernetFrame(frame []byte) (*EthernetFrame, error) {
@@ -85,6 +99,11 @@ func DecodeTCPHeader(header []byte) (*TCPHeader, error) {
 	if len(header) < 20 {
 		return nil, nil
 	}
+	off := int(header[12] >> 4) * 4
+	var payload []byte
+	if off >= 20 && off <= len(header) {
+		payload = header[off:]
+	}
 	return &TCPHeader{
 		SrcPort:    int(binary.BigEndian.Uint16(header[0:2])),
 		DstPort:    int(binary.BigEndian.Uint16(header[2:4])),
@@ -93,7 +112,20 @@ func DecodeTCPHeader(header []byte) (*TCPHeader, error) {
 		DataOffset: int(header[12] >> 4),
 		Flags:      int(header[13]),
 		Window:     int(binary.BigEndian.Uint16(header[14:16])),
-		Payload:    nil,
+		Payload:    payload,
+	}, nil
+}
+
+// DecodeUDPHeader parses a UDP header (8 bytes).
+func DecodeUDPHeader(header []byte) (*UDPHeader, error) {
+	if len(header) < 8 {
+		return nil, nil
+	}
+	return &UDPHeader{
+		SrcPort: int(binary.BigEndian.Uint16(header[0:2])),
+		DstPort: int(binary.BigEndian.Uint16(header[2:4])),
+		Length:  int(binary.BigEndian.Uint16(header[4:6])),
+		Payload: header[8:],
 	}, nil
 }
 
@@ -131,9 +163,13 @@ func DecodePacket(packet []byte) (*Packet, error) {
 		frameLen = ipTotalLen + 14
 	}
 
-	// For TCP, decode ports; for ICMP/other, ports are zero
-	if proto == "tcp" {
-		tcp, err := DecodeTCPHeader(eth.Payload[ipHeaderLen:])
+	transport := eth.Payload[ipHeaderLen:]
+
+	// For TCP/UDP, decode ports and snapshot payload; ICMP gets type/code
+	// pseudo-ports; other protocols keep zero ports.
+	switch proto {
+	case "tcp":
+		tcp, err := DecodeTCPHeader(transport)
 		if err != nil || tcp == nil {
 			return &Packet{
 				SrcIP:    ip.SrcIP.String(),
@@ -146,6 +182,10 @@ func DecodePacket(packet []byte) (*Packet, error) {
 		if payloadLen < 0 {
 			payloadLen = 0
 		}
+		snap := tcp.Payload
+		if len(snap) > PayloadSnapBytes {
+			snap = snap[:PayloadSnapBytes]
+		}
 		return &Packet{
 			SrcIP:      ip.SrcIP.String(),
 			DstIP:      ip.DstIP.String(),
@@ -155,6 +195,56 @@ func DecodePacket(packet []byte) (*Packet, error) {
 			TCPFlags:   tcp.Flags,
 			FrameLen:   frameLen,
 			PayloadLen: payloadLen,
+			Payload:    snap,
+		}, nil
+
+	case "udp":
+		udp, err := DecodeUDPHeader(transport)
+		if err != nil || udp == nil {
+			return &Packet{
+				SrcIP:    ip.SrcIP.String(),
+				DstIP:    ip.DstIP.String(),
+				Protocol: proto,
+				FrameLen: frameLen,
+			}, nil
+		}
+		payloadLen := ipTotalLen - ipHeaderLen - 8
+		if payloadLen < 0 {
+			payloadLen = 0
+		}
+		snap := udp.Payload
+		if len(snap) > PayloadSnapBytes {
+			snap = snap[:PayloadSnapBytes]
+		}
+		return &Packet{
+			SrcIP:      ip.SrcIP.String(),
+			DstIP:      ip.DstIP.String(),
+			SrcPort:    udp.SrcPort,
+			DstPort:    udp.DstPort,
+			Protocol:   proto,
+			FrameLen:   frameLen,
+			PayloadLen: payloadLen,
+			Payload:    snap,
+		}, nil
+
+	case "icmp":
+		var typ, code byte
+		if len(transport) >= 1 {
+			typ = transport[0]
+		}
+		if len(transport) >= 2 {
+			code = transport[1]
+		}
+		// Encode type/code into port fields so downstream detectors can
+		// distinguish echo/dest-unreachable/time-exceeded without a new column.
+		return &Packet{
+			SrcIP:      ip.SrcIP.String(),
+			DstIP:      ip.DstIP.String(),
+			SrcPort:    int(typ) << 8,
+			DstPort:    int(code),
+			Protocol:   proto,
+			FrameLen:   frameLen,
+			PayloadLen: len(transport),
 		}, nil
 	}
 
