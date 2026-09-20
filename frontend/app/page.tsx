@@ -93,10 +93,12 @@ export default function LandingPage() {
     <div className="page-stack">
       <section className="hero-grid">
         <div className="hero-panel hero-copy">
-          <div className="eyebrow">Mission control briefing</div>
-          <h1>Full-spectrum detection + response mission surface with live run seeding, containment, and forensic visibility.</h1>
+          <div className="eyebrow">Mission control</div>
+          <h1>Detect attacks. Decide with AI. Respond in one click.</h1>
           <p>
-            The app auto-starts a live session and continuously streams stored plus realtime telemetry, mixed-priority response actions, playbook mappings, and honeypot sessions. This page is a live strategic briefing with operational readiness numbers.
+            Every alert from Elastic, Wazuh, Suricata, and packet capture is triaged
+            by an AI analyst — verdict, confidence, and a recommended action — then
+            held for one-click enforcement with a full audit trail.
           </p>
           <div className="hero-actions">
             <Link href="/dashboard" className="button button-primary">Open Command Center</Link>
@@ -104,7 +106,7 @@ export default function LandingPage() {
             <Link href="/responses" className="button button-secondary">Open Responses</Link>
           </div>
           <div className="detail-card">
-            <h3>Priority mix from active telemetry</h3>
+            <h3>Active threats by severity</h3>
             <p>{headlineStats.attacksBySeverity}</p>
           </div>
         </div>
@@ -125,34 +127,34 @@ export default function LandingPage() {
       </section>
 
       <section className="stat-grid">
-        <div className="stat-tile"><span>Critical sessions</span><strong>{honeypots.items.filter((item) => item.severity === "critical").length}</strong></div>
-        <div className="stat-tile"><span>Engine mix buckets</span><strong>{(dashboard?.analytics.engine_distribution.length || 0).toLocaleString()}</strong></div>
-        <div className="stat-tile"><span>Severity buckets</span><strong>{(dashboard?.analytics.severity_distribution.length || 0).toLocaleString()}</strong></div>
-        <div className="stat-tile"><span>Top port buckets</span><strong>{(dashboard?.analytics.top_ports?.length || 0).toLocaleString()}</strong></div>
-        <div className="stat-tile"><span>Agent run mix</span><strong>{(dashboard?.analytics.agent_run_mix.length || 0).toLocaleString()}</strong></div>
-        <div className="stat-tile"><span>Latest alert sample size</span><strong>{(dashboard?.latest_alerts.length || 0).toLocaleString()}</strong></div>
+        <div className="stat-tile"><span>Critical honeypot sessions</span><strong>{honeypots.items.filter((item) => item.severity === "critical").length}</strong></div>
+        <div className="stat-tile"><span>Active engines</span><strong>{(dashboard?.analytics.engine_distribution.length || 0).toLocaleString()}</strong></div>
+        <div className="stat-tile"><span>Severity levels seen</span><strong>{(dashboard?.analytics.severity_distribution.length || 0).toLocaleString()}</strong></div>
+        <div className="stat-tile"><span>Top ports probed</span><strong>{(dashboard?.analytics.top_ports?.length || 0).toLocaleString()}</strong></div>
+        <div className="stat-tile"><span>Agent runs</span><strong>{(dashboard?.analytics.agent_run_mix.length || 0).toLocaleString()}</strong></div>
+        <div className="stat-tile"><span>Alerts in view</span><strong>{(dashboard?.latest_alerts.length || 0).toLocaleString()}</strong></div>
       </section>
 
       <section className="panel feature-strip">
           <div className="feature-box">
             <IconShield size={20} />
             <div>
-              <h3>Auto-start full-spectrum launch</h3>
-              <p>On open, the session starts automatically and seeds core attack scenario classes plus low/medium/high/critical response executions for immediate graph population.</p>
+              <h3>Live session on open</h3>
+              <p>The console starts capturing and streaming telemetry the moment it opens — no setup, no warm-up.</p>
             </div>
           </div>
         <div className="feature-box">
           <IconWorkflow size={20} />
           <div>
-            <h3>Mapped playbooks + response chain</h3>
-            <p>Generated signals include MITRE IDs that map through playbooks, response preview, and runtime control updates in one continuous flow.</p>
+            <h3>MITRE-mapped playbooks</h3>
+            <p>Every detection carries technique IDs that map to playbooks, response previews, and runtime controls.</p>
           </div>
         </div>
         <div className="feature-box">
           <IconSiren size={20} />
           <div>
-            <h3>Critical containment visibility</h3>
-            <p>Critical responses spin up honeypot containers and expose session/log artifacts directly in the Response Center for operator confirmation.</p>
+            <h3>Critical containment</h3>
+            <p>Critical responses spin up honeypot containers and surface captured sessions in the Response Center.</p>
           </div>
         </div>
       </section>

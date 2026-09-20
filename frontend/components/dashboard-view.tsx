@@ -52,7 +52,21 @@ type DashboardPayload = {
   response_preview: AlertItem["response_preview"];
 };
 
-const colors = ["#2563eb", "#3b82f6", "#60a5fa", "#93c5fd", "#bfdbfe", "#1e3a8a"];
+const chartPalette = ["#4f8ef7", "#7aa7f9", "#a5c3fb", "#cfe0fd", "#5c6577", "#2f66d8"];
+const severityPalette: Record<string, string> = {
+  critical: "#f0433c",
+  high: "#f59e0b",
+  medium: "#eab308",
+  low: "#64748b",
+  info: "#4f8ef7",
+};
+const severityClass: Record<string, string> = {
+  critical: "sev-critical",
+  high: "sev-high",
+  medium: "sev-medium",
+  low: "sev-low",
+  info: "sev-info",
+};
 
 export function DashboardView() {
   const [viewState] = useGlobalViewState();
@@ -141,41 +155,53 @@ export function DashboardView() {
             <AreaChart data={data.analytics.timeline}>
               <defs>
                 <linearGradient id="timelineShade" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="#3b82f6" stopOpacity={0.45} />
-                  <stop offset="100%" stopColor="#3b82f6" stopOpacity={0.02} />
+                  <stop offset="0%" stopColor="#4f8ef7" stopOpacity={0.35} />
+                  <stop offset="100%" stopColor="#4f8ef7" stopOpacity={0.02} />
                 </linearGradient>
               </defs>
-              <CartesianGrid stroke="#3b82f6" vertical={false} />
+              <CartesianGrid stroke="#232b3d" vertical={false} />
               <XAxis dataKey="time" hide />
-              <YAxis stroke="#60a5fa" />
+              <YAxis stroke="#5c6577" tick={{ fill: "#8b94a7", fontSize: 12 }} />
               <Tooltip />
-              <Area type="monotone" dataKey="count" stroke="#3b82f6" fill="url(#timelineShade)" strokeWidth={2} />
+              <Area type="monotone" dataKey="count" stroke="#4f8ef7" fill="url(#timelineShade)" strokeWidth={2} />
             </AreaChart>
           </ResponsiveContainer>
         </div>
 
         <div className="panel padded chart-panel">
           <div className="panel-head"><div><span className="kicker">Severity mix</span><h2>Alert distribution</h2></div></div>
-          <ResponsiveContainer width="100%" height={240}>
+          <ResponsiveContainer width="100%" height={200}>
             <PieChart>
-              <Pie data={data.analytics.severity_distribution} dataKey="value" nameKey="label" innerRadius={56} outerRadius={88}>
-                {data.analytics.severity_distribution.map((entry, index) => <Cell key={entry.label || index} fill={colors[index % colors.length]} />)}
+              <Pie data={data.analytics.severity_distribution} dataKey="value" nameKey="label" innerRadius={52} outerRadius={82} paddingAngle={2} strokeWidth={0}>
+                {data.analytics.severity_distribution.map((entry, index) => (
+                  <Cell key={entry.label || index} fill={severityPalette[String(entry.label || "").toLowerCase()] || chartPalette[index % chartPalette.length]} />
+                ))}
               </Pie>
               <Tooltip />
             </PieChart>
           </ResponsiveContainer>
+          <div className="chip-row" style={{ justifyContent: "center", marginTop: 8 }}>
+            {data.analytics.severity_distribution.map((entry) => {
+              const key = String(entry.label || "").toLowerCase();
+              return (
+                <span key={entry.label || ""} className={`chip ${severityClass[key] || ""}`}>
+                  {entry.label}: {entry.value}
+                </span>
+              );
+            })}
+          </div>
         </div>
 
         <div className="panel padded chart-panel">
           <div className="panel-head"><div><span className="kicker">Engine patterns</span><h2>Coverage pulse</h2></div></div>
           <ResponsiveContainer width="100%" height={240}>
             <ComposedChart data={data.analytics.engine_distribution}>
-              <CartesianGrid stroke="#3b82f6" vertical={false} />
-              <XAxis dataKey="label" stroke="#60a5fa" />
-              <YAxis stroke="#60a5fa" />
+              <CartesianGrid stroke="#232b3d" vertical={false} />
+              <XAxis dataKey="label" stroke="#5c6577" tick={{ fill: "#8b94a7", fontSize: 12 }} />
+              <YAxis stroke="#5c6577" tick={{ fill: "#8b94a7", fontSize: 12 }} />
               <Tooltip />
-              <Area dataKey="value" fill="#2563eb" stroke="#2563eb" fillOpacity={0.2} />
-              <Line dataKey="value" stroke="#0a0f29" strokeWidth={2} dot={{ r: 3 }} />
+              <Area dataKey="value" fill="#4f8ef7" stroke="#4f8ef7" fillOpacity={0.16} strokeWidth={2} />
+              <Line dataKey="value" stroke="#0b0e14" strokeWidth={2} dot={{ r: 3 }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -189,8 +215,8 @@ export function DashboardView() {
               destination: data.analytics.top_destinations[index]?.value || 0,
             }))}>
               <Tooltip />
-              <Radar name="Sources" dataKey="source" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.3} />
-              <Radar name="Destinations" dataKey="destination" stroke="#60a5fa" fill="#60a5fa" fillOpacity={0.2} />
+              <Radar name="Sources" dataKey="source" stroke="#4f8ef7" fill="#4f8ef7" fillOpacity={0.22} />
+              <Radar name="Destinations" dataKey="destination" stroke="#7aa7f9" fill="#7aa7f9" fillOpacity={0.14} />
             </RadarChart>
           </ResponsiveContainer>
         </div>
@@ -209,9 +235,8 @@ export function DashboardView() {
                 <strong>{alert.title}</strong>
                 <p>{alert.message}</p>
                 <div className="chip-row">
-                  <span className="chip">{alert.severity}</span>
-                  {alert.severity_level ? <span className="chip">level {alert.severity_level}</span> : null}
-                  {alert.technique_ids.slice(0, 5).map((item) => <span key={item} className="chip">{item}</span>)}
+                  <span className={`chip ${severityClass[alert.severity?.toLowerCase()] || ""}`}>{alert.severity}</span>
+                  {alert.technique_ids.slice(0, 5).map((item) => <span key={item} className="tag">{item}</span>)}
                 </div>
               </button>
             ))}

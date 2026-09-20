@@ -52,12 +52,13 @@ export function LiveAlerts() {
               <span className="chip accent">{item.engine}</span>
             </div>
             <p className="subtle" style={{ margin: "8px 0" }}>
-              {item.severity_level || item.severity || "unknown"} · {new Date(item.timestamp).toLocaleString()}
+              {new Date(item.timestamp).toLocaleString()}
             </p>
             <p style={{ margin: "8px 0 12px" }}>{item.message || "Alert matched"}</p>
             <div className="chip-row">
-              {item.rule_id ? <span className="chip">{item.rule_id}</span> : null}
-              {item.technique_ids.map((techniqueId) => <span key={techniqueId} className="chip">{techniqueId}</span>)}
+              <span className={`chip sev-${(item.severity_level || item.severity || "low").toLowerCase()}`}>{item.severity_level || item.severity || "unknown"}</span>
+              {item.rule_id ? <span className="tag">{item.rule_id}</span> : null}
+              {item.technique_ids.map((techniqueId) => <span key={techniqueId} className="tag">{techniqueId}</span>)}
             </div>
           </div>
         ))}

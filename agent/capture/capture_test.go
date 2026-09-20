@@ -1,6 +1,7 @@
 package capture
 
 import (
+	"os"
 	"context"
 	"encoding/binary"
 	"os/exec"
@@ -26,6 +27,11 @@ func TestCaptureLoop(t *testing.T) {
 	defer cancel()
 
 	go Capture(ctx, cfg)
+
+	// AF_PACKET on loopback needs CAP_NET_RAW; unprivileged test runs skip.
+	if os.Geteuid() != 0 {
+		t.Skip("AF_PACKET capture test requires root (CAP_NET_RAW)")
+	}
 
 	// Give capture loop time to start
 	time.Sleep(200 * time.Millisecond)

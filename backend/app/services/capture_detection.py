@@ -60,6 +60,20 @@ _SCAN_READ_LIMIT = _env_int("FDA_SCAN_READ_LIMIT", 20000)    # max events read p
 # only when deliberately testing scan detection on loopback.
 _SCAN_SUPPRESS_LOOPBACK = os.environ.get("FDA_SCAN_SUPPRESS_LOOPBACK", "true").lower() in ("true", "1", "yes")
 
+# --- SSH brute-force detection tuning ---------------------------------------
+# Repeated connection attempts to a single SSH port: real logins are rare;
+# credential-stuffing retries dozens of times per minute.
+_BRUTE_WINDOW_SEC = _env_int("FDA_BRUTE_WINDOW_SEC", 120)     # sliding window for attempts
+_BRUTE_THRESHOLD = _env_int("FDA_BRUTE_THRESHOLD", 15)        # SYN attempts to port 22 => brute force
+_BRUTE_COOLDOWN_SEC = _env_int("FDA_BRUTE_COOLDOWN_SEC", 300)
+
+# --- SYN flood detection tuning ---------------------------------------------
+# Half-open SYN storm against one port: more than N SYNs/sec to a single
+# dst port with no completed handshakes observed is a flood signature.
+_FLOOD_WINDOW_SEC = _env_int("FDA_FLOOD_WINDOW_SEC", 10)
+_FLOOD_THRESHOLD = _env_int("FDA_FLOOD_THRESHOLD", 100)       # SYNs to one port within window
+_FLOOD_COOLDOWN_SEC = _env_int("FDA_FLOOD_COOLDOWN_SEC", 300)
+
 # --- rule-match phase tuning ----------------------------------------------
 _MATCH_WATERMARK_KEY = "capture_detection.match_watermark"
 _MATCH_BATCH_LIMIT = 100
@@ -67,6 +81,14 @@ _MATCH_BATCH_LIMIT = 100
 _scan_state_lock = threading.Lock()
 # src_ip -> (window_start_epoch, last_alert_epoch, [(ts, dst_port), ...])
 _scan_windows: dict[str, tuple[float, float, list[tuple[float, int]]]] = {}
+
+_brute_state_lock = threading.Lock()
+# src_ip -> (last_alert_epoch, [attempt_epochs])  (attempts = SYNs to SSH port)
+_brute_windows: dict[str, tuple[float, list[float]]] = {}
+
+_flood_state_lock = threading.Lock()
+# (src_ip, dst_port) -> (last_alert_epoch, [syn_epochs])
+_flood_windows: dict[tuple[str, int], tuple[float, list[float]]] = {}
 
 _SEVERITY_ORDER_SQL = (
     "CASE severity WHEN 'critical' THEN 0 WHEN 'high' THEN 1 "
@@ -81,6 +103,8 @@ def _detect_from_capture_loop() -> None:
     while _CAPTURE_DETECT_RUNNING.is_set():
         try:
             _detect_port_scans()
+            _detect_ssh_brute_force()
+            _detect_syn_flood()
             _match_alerts_to_rules()
         except Exception as exc:
             logger.warning("Capture detection error: %s", exc)
@@ -190,29 +214,43 @@ def _max_burst_distinct(probes: list[tuple[float, int]], burst_sec: float) -> in
 
 def _emit_port_scan_alert(src_ip: str, port_count: int, burst: int) -> None:
     severity = "medium" if port_count < 50 else "high"
-    title = "Port scan reconnaissance (T1046)"
-    technique_id = "T1046"
-    tech = [technique_id]
-    ts = datetime.now(timezone.utc).isoformat()
-    message = (
+    _emit_capture_alert(
+        "Port scan", "T1046", severity,
+        "Port scan reconnaissance (T1046)",
         f"{port_count} distinct TCP ports probed by {src_ip} within "
         f"{_SCAN_WINDOW_SEC}s ({burst} within a {_SCAN_BURST_SEC}s burst; "
-        f"packet capture)."
+        f"packet capture).",
+        src_ip,
     )
 
-    # fda-internal source: detection output must never be re-ingested as input.
+
+def _is_syn(packet_ev: dict) -> bool:
+    """True when the event is a TCP packet with only the SYN flag set (0x02)."""
+    proto = (packet_ev.get("protocol", "") or packet_ev.get("network_transport", "") or "").upper()
+    if proto not in ("TCP", "TCP6"):
+        return False
+    flags = packet_ev.get("tcp_flags")
+    if flags is None:
+        return False
+    try:
+        return (int(flags) & 0x12) == 0x02  # SYN set, ACK clear
+    except (TypeError, ValueError):
+        return False
+
+
+def _emit_capture_alert(
+    kind: str, technique_id: str, severity: str, title: str, message: str,
+    src_ip: str, dst_ip: str = "",
+) -> None:
+    """Shared alert emission for capture-based detections."""
+    ts = datetime.now(timezone.utc).isoformat()
+    tech = [technique_id]
     store_event(
         "fda-internal", "fda-detection",
-        engine="fda-internal",
-        title=title,
-        message=message,
-        severity=severity,
-        rule_id=f"CAPTURE-{technique_id}",
-        source_ip=src_ip,
-        technique_ids=tech,
-        timestamp=ts,
+        engine="fda-internal", title=title, message=message,
+        severity=severity, rule_id=f"CAPTURE-{technique_id}",
+        source_ip=src_ip, destination_ip=dst_ip, technique_ids=tech, timestamp=ts,
     )
-
     action = choose_action(tech)
     detail = action_detail(action)
     preview = {
@@ -227,13 +265,132 @@ def _emit_port_scan_alert(src_ip: str, port_count: int, burst: int) -> None:
         "correlated", severity, title,
         message=message,
         rule_id=f"CAPTURE-{technique_id}",
-        source_ip=src_ip,
+        source_ip=src_ip, destination_ip=dst_ip,
         technique_ids=tech,
         response_preview=preview,
         timestamp=ts,
     )
-    logger.info("Port scan detected: %s probed %d TCP ports -> alert CAPTURE-%s",
-                src_ip, port_count, technique_id)
+    logger.info("%s detected from %s -> alert CAPTURE-%s", kind, src_ip, technique_id)
+
+
+def _detect_ssh_brute_force() -> None:
+    """Detect SSH credential brute-force from capture-agent TCP SYNs.
+
+    Any SYN to port 22 counts as an authentication attempt (a real login
+    completes once; stuffing scripts retry dozens of times). Alert when a
+    source exceeds _BRUTE_THRESHOLD attempts inside _BRUTE_WINDOW_SEC,
+    rate-limited per source by _BRUTE_COOLDOWN_SEC.
+    """
+    window_start_iso = (
+        datetime.now(timezone.utc) - timedelta(seconds=_BRUTE_WINDOW_SEC)
+    ).isoformat()
+    events = query_events(sources=["capture"], start=window_start_iso, limit=_SCAN_READ_LIMIT)
+    if not events:
+        return
+
+    now = time.time()
+    cutoff = now - _BRUTE_WINDOW_SEC
+    per_source: dict[str, list[float]] = {}
+    for ev in events:
+        ev_ts = _parse_event_ts(ev.get("timestamp"))
+        if ev_ts < cutoff:
+            continue
+        if not _is_syn(ev):
+            continue
+        dst_port = ev.get("destination_port") or 0
+        if dst_port != 22:
+            continue
+        src_ip = ev.get("source_ip", "") or ""
+        dst_ip = ev.get("destination_ip", "") or ""
+        if not src_ip or src_ip == "0.0.0.0":
+            continue
+        if _SCAN_SUPPRESS_LOOPBACK and src_ip.startswith("127.") and dst_ip.startswith("127."):
+            continue
+        per_source.setdefault(src_ip, []).append(ev_ts)
+
+    with _brute_state_lock:
+        for src_ip, attempts in per_source.items():
+            last_alert, _ = _brute_windows.get(src_ip, (0.0, []))
+            fresh = [ts for ts in attempts if ts >= cutoff]
+            if len(fresh) >= _BRUTE_THRESHOLD and now - last_alert >= _BRUTE_COOLDOWN_SEC:
+                _emit_capture_alert(
+                    "SSH brute-force", "T1110", "high",
+                    "SSH credential brute-force (T1110)",
+                    f"{len(fresh)} SSH connection attempts from {src_ip} within "
+                    f"{_BRUTE_WINDOW_SEC}s (threshold {_BRUTE_THRESHOLD}; packet capture).",
+                    src_ip,
+                )
+                _brute_windows[src_ip] = (now, fresh)
+            else:
+                _brute_windows[src_ip] = (last_alert, fresh)
+
+
+def _detect_syn_flood() -> None:
+    """Detect SYN floods: a half-open SYN storm against a single port.
+
+    More than _FLOOD_THRESHOLD bare SYNs from one source to one dst port
+    inside _FLOOD_WINDOW_SEC, with no SYN-ACKs back (half-open), is a DoS
+    signature rather than service traffic. DoS is availability impact (T1498).
+    """
+    window_start_iso = (
+        datetime.now(timezone.utc) - timedelta(seconds=_FLOOD_WINDOW_SEC)
+    ).isoformat()
+    events = query_events(sources=["capture"], start=window_start_iso, limit=_SCAN_READ_LIMIT)
+    if not events:
+        return
+
+    now = time.time()
+    cutoff = now - _FLOOD_WINDOW_SEC
+    syn_counts: dict[tuple[str, int], list[float]] = {}
+    synack_seen: set[tuple[str, int]] = set()
+    dst_ips: dict[tuple[str, int], str] = {}
+    for ev in events:
+        ev_ts = _parse_event_ts(ev.get("timestamp"))
+        if ev_ts < cutoff:
+            continue
+        proto = (ev.get("protocol", "") or ev.get("network_transport", "") or "").upper()
+        if proto not in ("TCP", "TCP6"):
+            continue
+        flags = ev.get("tcp_flags")
+        try:
+            flag_val = int(flags) if flags is not None else None
+        except (TypeError, ValueError):
+            flag_val = None
+        src_ip = ev.get("source_ip", "") or ""
+        dst_ip = ev.get("destination_ip", "") or ""
+        dst_port = ev.get("destination_port") or 0
+        if not src_ip or not dst_port:
+            continue
+        if _SCAN_SUPPRESS_LOOPBACK and src_ip.startswith("127.") and dst_ip.startswith("127."):
+            continue
+        if flag_val is not None and (flag_val & 0x12) == 0x12:
+            synack_seen.add((src_ip, dst_port))  # handshake progressing: not half-open
+            continue
+        if _is_syn(ev):
+            key = (src_ip, dst_port)
+            syn_counts.setdefault(key, []).append(ev_ts)
+            if dst_ip:
+                dst_ips[key] = dst_ip
+
+    with _flood_state_lock:
+        for (src_ip, dst_port), syns in syn_counts.items():
+            if (src_ip, dst_port) in synack_seen:
+                continue  # connections are completing: legitimate load
+            last_alert, _ = _flood_windows.get((src_ip, dst_port), (0.0, []))
+            fresh = [ts for ts in syns if ts >= cutoff]
+            if len(fresh) >= _FLOOD_THRESHOLD and now - last_alert >= _FLOOD_COOLDOWN_SEC:
+                dst_ip = dst_ips.get((src_ip, dst_port), "")
+                _emit_capture_alert(
+                    "SYN flood", "T1498", "critical",
+                    "SYN flood denial-of-service (T1498)",
+                    f"{len(fresh)} half-open SYNs from {src_ip} to port {dst_port} within "
+                    f"{_FLOOD_WINDOW_SEC}s with no completed handshakes (threshold "
+                    f"{_FLOOD_THRESHOLD}; packet capture).",
+                    src_ip, dst_ip,
+                )
+                _flood_windows[(src_ip, dst_port)] = (now, fresh)
+            else:
+                _flood_windows[(src_ip, dst_port)] = (last_alert, fresh)
 
 
 def _parse_technique_ids(raw) -> list[str]:

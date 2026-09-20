@@ -131,7 +131,7 @@ export function Nav() {
         <div className="sidebar-mark" />
         <div>
           <div className="sidebar-title">FDA Cyber Control</div>
-          <div className="sidebar-subtitle">Elastic, Wazuh, Suricata, ZeroClaw Hands</div>
+          <div className="sidebar-subtitle">Detection &amp; response console</div>
         </div>
       </div>
       <nav className="sidebar-nav">
@@ -220,8 +220,8 @@ export function Nav() {
       </div>
 
       <div className="sidebar-foot">
-        <div className="chip accent">Realtime</div>
-        <p>Human-readable rules, playbooks, agent steps, and response previews.</p>
+        <div className="chip accent">Live</div>
+        <p>Detections, playbooks, agent steps, and response previews.</p>
       </div>
     </aside>
   );

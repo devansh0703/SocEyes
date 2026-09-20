@@ -1,25 +1,18 @@
 import type { Metadata } from "next";
-import { Exo_2 as Ndot, Nunito_Sans as N1, IBM_Plex_Mono as IbmPixel } from "next/font/google";
+import { Inter, IBM_Plex_Mono } from "next/font/google";
 
 import "./globals.css";
 import { Nav } from "../components/nav";
 import { RuleExplorerFab } from "../components/rule-explorer-fab";
 
-const headingFont = Ndot({
+const bodyFont = Inter({
   subsets: ["latin"],
-  weight: ["700", "800", "900"],
-  variable: "--font-heading",
-  display: "swap",
-});
-
-const bodyFont = N1({
-  subsets: ["latin"],
-  weight: ["300", "400", "600", "700"],
+  weight: ["400", "500", "600", "700"],
   variable: "--font-body",
   display: "swap",
 });
 
-const monoFont = IbmPixel({
+const monoFont = IBM_Plex_Mono({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
   variable: "--font-mono",
@@ -37,7 +30,7 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body
-        className={`${headingFont.variable} ${bodyFont.variable} ${monoFont.variable} font-body`}
+        className={`${bodyFont.variable} ${monoFont.variable}`}
       >
         <div className="app-shell">
           <Nav />
@@ -45,8 +38,8 @@ export default function RootLayout({
             <main className="content-shell">{children}</main>
             <RuleExplorerFab />
             <footer className="footer-bar">
-              Existing rules only. Live telemetry from Elastic, Wazuh, Suricata,
-              and ZeroClaw-compatible orchestration hands.
+              FDA Cyber Control — realtime detection and response across Elastic,
+              Wazuh, Suricata, and packet capture.
             </footer>
           </div>
         </div>

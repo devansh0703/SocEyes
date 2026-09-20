@@ -19,15 +19,15 @@ type Incident = {
   recommended_action?: string;
 };
 
-const severityColors: Record<string, string> = {
-  critical: "#dc2626",
-  high: "#d97706",
-  medium: "#64748b",
-  low: "#94a3b8",
+const severityClasses: Record<string, string> = {
+  critical: "sev-critical",
+  high: "sev-high",
+  medium: "sev-medium",
+  low: "sev-low",
 };
 
 const severityIcons: Record<string, string> = {
-  critical: "◆",
+  critical: "●",
   high: "▲",
   medium: "●",
   low: "○",
@@ -97,10 +97,10 @@ export function IncidentsView() {
         {incidents.map((inc) => (
           <button
             key={inc.id}
-            className={`incident-card ${inc.id === selectedId ? "selected" : ""}`}
+            className={`incident-card ${severityClasses[inc.severity?.toLowerCase()] || "sev-medium"} ${inc.id === selectedId ? "selected" : ""}`}
             onClick={() => setSelectedId(inc.id)}
           >
-            <div className="incident-severity" style={{ color: severityColors[inc.severity] || severityColors.medium }}>
+            <div className={`incident-severity ${severityClasses[inc.severity?.toLowerCase()] || "sev-medium"}`}>
               <span className="severity-icon">{severityIcons[inc.severity] || "●"}</span>
               <span className="severity-label">{inc.severity.toUpperCase()}</span>
             </div>
@@ -114,10 +114,7 @@ export function IncidentsView() {
       {selected && (
         <div className="incident-detail">
           <div
-            className="detail-severity-badge"
-            style={{
-              backgroundColor: severityColors[selected.severity] || severityColors.medium,
-            }}
+            className={`detail-severity-badge ${severityClasses[selected.severity?.toLowerCase()] || "sev-medium"}`}
           >
             <span className="severity-icon">{severityIcons[selected.severity] || "●"}</span>
             {selected.severity.toUpperCase()}

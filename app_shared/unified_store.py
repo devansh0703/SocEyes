@@ -428,7 +428,13 @@ def store_events_batch(events: list[dict[str, Any]]) -> list[str]:
         sev = normalize_severity(ev.get("severity", "medium"))
         sev_label = sev.get("label", "medium") if isinstance(sev, dict) else str(sev)
         tech_json = _json.dumps(ev.get("technique_ids") or [])
-        raw_json = _json.dumps(ev.get("raw") or {})
+        # Preserve agent-supplied top-level fields the fixed schema has no
+        # column for (tcp_flags today, more later) inside raw so they survive.
+        _raw_obj = dict(ev.get("raw") or {})
+        for _k in ("tcp_flags",):
+            if ev.get(_k) is not None:
+                _raw_obj[_k] = ev[_k]
+        raw_json = _json.dumps(_raw_obj)
         raw_compressed = _compress_raw(raw_json)
         import base64
         raw_b64 = base64.b64encode(raw_compressed).decode("ascii")
@@ -458,7 +464,6 @@ def store_events_batch(events: list[dict[str, Any]]) -> list[str]:
             now,
         ))
         ids.append(eid)
-
     with _lock:
         conn = get_conn()
         conn.execute("BEGIN IMMEDIATE")
@@ -749,6 +754,12 @@ def query_events(
             ).lower()
             if query.lower() not in text:
                 continue
+        # Flatten agent TCP flags: stored inside raw JSON by the capture agent,
+        # surfaced top-level so detectors can filter SYN-only probes.
+        if not doc.get("tcp_flags"):
+            raw = doc.get("raw")
+            if isinstance(raw, dict) and raw.get("tcp_flags") is not None:
+                doc["tcp_flags"] = raw.get("tcp_flags")
         events.append(doc)
     return events
 

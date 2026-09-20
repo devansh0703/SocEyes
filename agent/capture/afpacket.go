@@ -44,6 +44,7 @@ type Packet struct {
 	SrcPort   int
 	DstPort   int
 	Protocol  string
+	TCPFlags  int    // TCP header flags (0x02 SYN, 0x12 SYN-ACK, ...); 0 for non-TCP
 	Timestamp int64
 }
 
@@ -136,6 +137,7 @@ func DecodePacket(packet []byte) (*Packet, error) {
 			SrcPort:  tcp.SrcPort,
 			DstPort:  tcp.DstPort,
 			Protocol: proto,
+			TCPFlags: tcp.Flags,
 		}, nil
 	}
 

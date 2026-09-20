@@ -296,6 +296,7 @@ func packetToEvent(p capture.Packet, host string) map[string]interface{} {
 		"destination_port": p.DstPort,
 		"protocol":         p.Protocol,
 		"network_transport": p.Protocol,
+		"tcp_flags":        p.TCPFlags,
 		"engine":           "agent",
 		"host_name":        host,
 		"technique_ids":    []string{},
