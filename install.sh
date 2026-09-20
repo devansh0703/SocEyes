@@ -72,9 +72,16 @@ echo ""
 echo -e "${BOLD}Step 5: Go capture agent${RESET}"
 if command -v go >/dev/null 2>&1; then
     info "Building Go agent..."
-    (cd "$FDA_DIR/agent" && go build -o "$FDA_DIR/bin/fda-agent" ./main.go 2>/dev/null)
+    (cd "$FDA_DIR/agent" && go build -o "$FDA_DIR/bin/fda-agent" . 2>/dev/null)
     if [ -f "$FDA_DIR/bin/fda-agent" ]; then
-        ok "Go agent built: $FDA_DIR/bin/fda-agent"
+        # Packet capture needs CAP_NET_RAW; grant it to the binary so the
+        # agent runs unprivileged (no root process in the stack).
+        if sudo -n setcap cap_net_raw=ep "$FDA_DIR/bin/fda-agent" 2>/dev/null \
+            || setcap cap_net_raw=ep "$FDA_DIR/bin/fda-agent" 2>/dev/null; then
+            ok "Go agent built: $FDA_DIR/bin/fda-agent (cap_net_raw granted)"
+        else
+            ok "Go agent built: $FDA_DIR/bin/fda-agent (run: sudo setcap cap_net_raw=ep $FDA_DIR/bin/fda-agent)"
+        fi
     else
         warn "Go agent build failed (run 'cd agent && go build' manually)"
     fi

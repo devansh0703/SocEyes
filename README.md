@@ -81,11 +81,12 @@ In another terminal (requires root for AF_PACKET):
 
 ```bash
 cd agent
-go build -o fda-agent ./main.go
-sudo ./fda-agent
+go build -o fda-agent .
+sudo setcap cap_net_raw=ep fda-agent   # packet capture without running as root
+./fda-agent
 ```
 
-The agent captures packets on the default interface and POSTs decoded events to the API at http://localhost:8001/api/events/ingest.
+The agent captures packets on the default interface, **excludes its own API traffic** (no feedback loop), and POSTs decoded events to the API at `FDA_API_URL` (default http://127.0.0.1:8000/api/events/ingest). Point it at your server with `FDA_API_URL=http://<host>:<port>` and choose the interface with `FDA_AGENT_INTERFACE` (default `lo`).
 
 ## Screenshots
 

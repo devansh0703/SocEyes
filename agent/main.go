@@ -8,8 +8,10 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -25,6 +27,29 @@ type AgentConfig struct {
 	FlushEvery time.Duration
 }
 
+// apiPort extracts the port from the API URL. The agent must exclude its
+// own POST traffic: capturing on loopback, every POST to the API generates
+// packets that get captured, batched, and POSTed again — an amplification
+// loop that grows until the agent (and server) die. Exclude by port so the
+// fix holds regardless of what port the API runs on.
+func apiPort(apiURL string) int {
+	u, err := url.Parse(apiURL)
+	if err != nil || u.Port() == "" {
+		return 0
+	}
+	p, err := strconv.Atoi(u.Port())
+	if err != nil {
+		return 0
+	}
+	return p
+}
+
+// isSelfTraffic reports whether a captured packet belongs to the agent's
+// own API conversation (POST or its response).
+func isSelfTraffic(pkt capture.Packet, port int) bool {
+	return port != 0 && (pkt.SrcPort == port || pkt.DstPort == port)
+}
+
 func main() {
 	cfg := AgentConfig{
 		Interface:  envOr("FDA_AGENT_INTERFACE", "lo"),
@@ -34,6 +59,7 @@ func main() {
 	}
 
 	apiURL := strings.TrimRight(cfg.APIURL, "/") + "/api/events/ingest"
+	selfPort := apiPort(cfg.APIURL)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -66,27 +92,39 @@ func main() {
 	ticker := time.NewTicker(cfg.FlushEvery)
 	defer ticker.Stop()
 
-	log.Printf("FDA Agent capturing on %s -> %s", cfg.Interface, apiURL)
+	log.Printf("FDA Agent capturing on %s -> %s (excluding self-traffic on port %d)", cfg.Interface, apiURL, selfPort)
 
+	lastPostErrLog := time.Time{}
 	for {
 		select {
 		case <-ctx.Done():
 			// Flush remaining
 			if len(batch) > 0 {
-				postEvents(apiURL, batch)
+				if err := postEvents(apiURL, batch); err != nil {
+					log.Printf("final flush: %v", err)
+				}
 			}
 			return
 		case pkt := <-eventCh:
+			if isSelfTraffic(pkt, selfPort) {
+				continue // never feed our own POSTs back into the pipeline
+			}
 			batch = append(batch, packetToEvent(pkt))
 			if len(batch) >= cfg.BatchSize {
-				postEvents(apiURL, batch)
+				if err := postEvents(apiURL, batch); err != nil && time.Since(lastPostErrLog) > 30*time.Second {
+					log.Printf("ingest failed: %v", err)
+					lastPostErrLog = time.Now()
+				}
 				batch = batch[:0]
 			}
 		case err := <-errCh:
 			log.Printf("Capture error: %v", err)
 		case <-ticker.C:
 			if len(batch) > 0 {
-				postEvents(apiURL, batch)
+				if err := postEvents(apiURL, batch); err != nil && time.Since(lastPostErrLog) > 30*time.Second {
+					log.Printf("ingest failed: %v", err)
+					lastPostErrLog = time.Now()
+				}
 				batch = batch[:0]
 			}
 		}
