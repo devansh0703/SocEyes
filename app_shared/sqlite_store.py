@@ -583,7 +583,7 @@ def index_rule(rule_doc: dict[str, Any]) -> None:
                 json.dumps(rule_doc.get("technique_ids", []) or []),
                 json.dumps(rule_doc.get("mitre_ids", []) or []),
                 rule_doc.get("file_path", ""),
-                json.dumps(rule_doc),
+                json.dumps(rule_doc, default=str),
             ),
         )
         conn.commit()

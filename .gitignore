@@ -80,7 +80,7 @@ docker-data/
 # Vendored detection corpora and cloned playbooks (mounted at runtime).
 detection-rules/
 sigma/
-wazuh/
+wazuh-ruleset/
 panther-analysis/
 vendor/
 zeroclaw/hands/*/context.json

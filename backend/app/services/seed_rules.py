@@ -5,7 +5,10 @@ standalone to re-index corpora after a fetch (scripts/fetch_rule_corpora.sh).
 """
 from __future__ import annotations
 
+import json
 import logging
+import re
+import xml.etree.ElementTree as ET
 from pathlib import Path
 
 from app_shared.unified_store import index_rule
@@ -19,6 +22,69 @@ def _load_yaml():
         return yaml
     except ImportError:
         return None
+
+
+def _wazuh_level_to_severity(level: int) -> str:
+    """Wazuh rule levels (0-15) mapped to the catalog's severity labels."""
+    if level >= 12:
+        return "critical"
+    if level >= 8:
+        return "high"
+    if level >= 4:
+        return "medium"
+    return "low"
+
+
+def _seed_wazuh(root: Path) -> int:
+    """Wazuh ruleset XML files: <rule id="N" level="M"> with <description>,
+    optional <mitre><id>TXXXX</id></mitre>. Group children inherit the parent
+    group name so composite detections stay searchable."""
+    wazuh_dir = root / "wazuh-ruleset" / "rules"
+    if not wazuh_dir.exists():
+        return 0
+    count = 0
+    for xml_file in sorted(wazuh_dir.glob("*.xml")):
+        try:
+            tree = ET.parse(xml_file)
+        except ET.ParseError as exc:
+            logger.debug("wazuh %s: XML parse error %s", xml_file.name, exc)
+            continue
+        group_name = ""
+        for elem in tree.getroot().iter():
+            if elem.tag == "group":
+                group_name = elem.get("name", "")
+                continue
+            if elem.tag != "rule":
+                continue
+            rule_id = elem.get("id", "")
+            if not rule_id:
+                continue
+            try:
+                level = int(elem.get("level", "0"))
+            except ValueError:
+                level = 0
+            if level < 3:  # informational noise
+                continue
+            description = ""
+            for child in elem:
+                if child.tag == "description" and (child.text or "").strip():
+                    description = child.text.strip()
+                    break
+            mitre_ids = sorted({
+                m.text.strip() for m in elem.iter("id")
+                if m.text and re.fullmatch(r"T\d{4}(?:\.\d{3})?", m.text.strip())
+            })
+            raw = {"group": group_name, "level": level}
+            index_rule({
+                "rule_id": f"wazuh-{rule_id}", "engine": "wazuh",
+                "title": description[:120] or f"Wazuh rule {rule_id}",
+                "description": description,
+                "severity": _wazuh_level_to_severity(level),
+                "technique_ids": mitre_ids, "mitre_ids": mitre_ids,
+                "file_path": str(xml_file), "raw": raw,
+            })
+            count += 1
+    return count
 
 
 def _load_tomllib():
@@ -134,11 +200,11 @@ def _seed_elastic(root: Path) -> int:
 def seed_rules(root: Path) -> dict[str, int]:
     """Index all available detection corpora. Returns per-engine counts."""
     counts = {
+        "wazuh": _seed_wazuh(root),
         "sigma": _seed_sigma(root),
         "panther": _seed_panther(root),
         "elastic": _seed_elastic(root),
     }
     for engine, count in counts.items():
-        if count:
-            logger.info("Indexed %d %s rules", count, engine)
+        logger.info("Indexed %d %s rules", count, engine)
     return counts

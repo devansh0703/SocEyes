@@ -5,7 +5,7 @@
 # Fetches the vendored detection corpora (gitignored, mounted at runtime):
 #   - SigmaHQ/sigma                     -> sigma/           (community Sigma rules)
 #   - elastic/detection-rules           -> detection-rules/ (Elastic TOML rules)
-#   - wazuh/wazuh                       -> wazuh/           (Wazuh SCA policies)
+#   - wazuh/wazuh-ruleset               -> wazuh-ruleset/  (Wazuh detection rules XML)
 #   - panther-labs/panther-analysis     -> panther-analysis/ (Panther rules)
 #
 # Tries a shallow git clone first, then falls back to a GitHub codeload
@@ -58,7 +58,7 @@ failures=0
 
 fetch "Sigma"        "https://github.com/SigmaHQ/sigma.git"                      "sigma"            "${FDA_SKIP_SIGMA:-0}"    || failures=$((failures+1))
 fetch "Elastic"      "https://github.com/elastic/detection-rules.git"            "detection-rules"  "${FDA_SKIP_ELASTIC:-0}"  || failures=$((failures+1))
-fetch "Wazuh"        "https://github.com/wazuh/wazuh.git"                        "wazuh"            "${FDA_SKIP_WAZUH:-0}"    || failures=$((failures+1))
+fetch "Wazuh"        "https://github.com/wazuh/wazuh-ruleset.git"                "wazuh-ruleset"    "${FDA_SKIP_WAZUH:-0}"    || failures=$((failures+1))
 fetch "Panther"      "https://github.com/panther-labs/panther-analysis.git"      "panther-analysis" "${FDA_SKIP_PANTHER:-0}"  || failures=$((failures+1))
 
 echo ""

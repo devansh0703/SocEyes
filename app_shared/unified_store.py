@@ -1191,7 +1191,7 @@ def index_rule(rule_doc: dict[str, Any]) -> None:
                     rule_doc.get("description", ""),
                     rule_doc.get("query", ""),
                 ]),
-                "raw": _json.dumps(rule_doc),
+                "raw": _json.dumps(rule_doc, default=str),
             }
             session = get_es_client()
             r = session.post(
@@ -1224,7 +1224,7 @@ def index_rule(rule_doc: dict[str, Any]) -> None:
                 _json.dumps(rule_doc.get("technique_ids", []) or []),
                 _json.dumps(rule_doc.get("mitre_ids", []) or []),
                 rule_doc.get("file_path", ""),
-                _json.dumps(rule_doc),
+                _json.dumps(rule_doc, default=str),
             ),
         )
         conn.commit()
