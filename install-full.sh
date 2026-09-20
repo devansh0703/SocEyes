@@ -316,7 +316,7 @@ bootstrap_rules() {
 import sys, yaml
 sys.path.insert(0, '.')
 from pathlib import Path
-from app_shared.sqlite_store import init_db, index_rule
+from app_shared.unified_store import init_db, index_rule
 init_db()
 count = 0
 for yml in (Path('sigma')/'rules').rglob('*.yml'):

@@ -67,6 +67,7 @@ export function IncidentsView() {
         method: "POST",
         body: JSON.stringify({
           action,
+          alert_id: selected.id,
           rule_id: selected.rule_id,
           source_ip: selected.source_ip,
           destination_ip: selected.destination_ip,

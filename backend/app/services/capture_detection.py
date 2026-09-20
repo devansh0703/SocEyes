@@ -28,6 +28,7 @@ import os
 import sqlite3
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from datetime import datetime, timezone
 
 from app_shared.response_policy import action_detail, choose_action, render_command_preview
@@ -40,10 +41,24 @@ _CAPTURE_DETECT_RUNNING = threading.Event()
 _capture_detect_thread: threading.Thread | None = None
 
 # --- port-scan detection tuning -------------------------------------------
-_SCAN_WINDOW_SEC = 60          # sliding window for distinct-port counting
-_SCAN_PORT_THRESHOLD = 20      # distinct TCP dst ports in window => scan
-_SCAN_BURST_SEC = 15           # those ports must be touched within this burst
-_SCAN_COOLDOWN_SEC = 300       # min seconds between alerts for the same source
+# All knobs env-tunable so operators can match their traffic profile without
+# a redeploy (correlation tuning).
+def _env_int(name: str, default: int) -> int:
+    try:
+        return int(os.environ.get(name, "") or default)
+    except (TypeError, ValueError):
+        return default
+
+
+_SCAN_WINDOW_SEC = _env_int("FDA_SCAN_WINDOW_SEC", 60)       # sliding window for distinct-port counting
+_SCAN_PORT_THRESHOLD = _env_int("FDA_SCAN_PORT_THRESHOLD", 20)  # distinct TCP dst ports in window => scan
+_SCAN_BURST_SEC = _env_int("FDA_SCAN_BURST_SEC", 15)         # those ports must be touched within this burst
+_SCAN_COOLDOWN_SEC = _env_int("FDA_SCAN_COOLDOWN_SEC", 300)  # min seconds between alerts for the same source
+_SCAN_READ_LIMIT = _env_int("FDA_SCAN_READ_LIMIT", 20000)    # max events read per detector pass
+# Loopback-to-loopback traffic is local service chatter, not reconnaissance;
+# counting it false-positives constantly on busy hosts. Disable suppression
+# only when deliberately testing scan detection on loopback.
+_SCAN_SUPPRESS_LOOPBACK = os.environ.get("FDA_SCAN_SUPPRESS_LOOPBACK", "true").lower() in ("true", "1", "yes")
 
 # --- rule-match phase tuning ----------------------------------------------
 _MATCH_WATERMARK_KEY = "capture_detection.match_watermark"
@@ -90,9 +105,21 @@ def _detect_port_scans() -> None:
     ambient traffic is not) and the source has not alerted within
     SCAN_COOLDOWN_SEC.
     """
-    events = query_events(sources=["capture"], limit=500)
+    # Time-windowed read, not count-limited: on a busy network the newest
+    # 500 events can cover barely a second of traffic, so scans would scroll
+    # past unseen. Pull everything inside the scan window (bounded by
+    # _SCAN_READ_LIMIT; the idx_events_src_ts index makes this a range scan).
+    window_start_iso = (
+        datetime.now(timezone.utc) - timedelta(seconds=_SCAN_WINDOW_SEC)
+    ).isoformat()
+    events = query_events(sources=["capture"], start=window_start_iso, limit=_SCAN_READ_LIMIT)
     if not events:
         return
+    # query_events returns newest-first; the window logic below assumes
+    # chronological order (window_start comes from the FIRST packet seen).
+    # Sort ascending by parsed timestamp so a newest-first feed cannot
+    # poison the window with a single future-dated probe.
+    events = sorted(events, key=lambda ev: _parse_event_ts(ev.get("timestamp")))
 
     now = time.time()
     cutoff = now - _SCAN_WINDOW_SEC
@@ -103,10 +130,15 @@ def _detect_port_scans() -> None:
             if ev_ts < cutoff:
                 continue
             src_ip = ev.get("source_ip", "") or ""
+            dst_ip = ev.get("destination_ip", "") or ""
             dst_port = ev.get("destination_port") or 0
-            proto = (ev.get("protocol", "") or "").upper()
+            proto = (ev.get("protocol", "") or ev.get("network_transport", "") or "").upper()
             if not src_ip or src_ip == "0.0.0.0" or not dst_port:
                 continue
+            if _SCAN_SUPPRESS_LOOPBACK and (
+                src_ip.startswith("127.") and dst_ip.startswith("127.")
+            ):
+                continue  # local service chatter, not reconnaissance
             if proto and proto not in ("TCP", "TCP6"):
                 continue
             entry = _scan_windows.get(src_ip)

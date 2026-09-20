@@ -16,8 +16,8 @@ Single-box IDS/IPS with AI-driven triage and nftables enforcement. Detects real 
 1. **Real packet capture** — Go agent captures raw traffic via AF_PACKET (eBPF ready)
 2. **Real log ingestion** — journald, auditd, syslog, nginx, Windows Event Log
 3. **Detection** — 6000+ rules (Sigma, Elastic, Wazuh, Panther) with BM25 search
-4. **AI triage** — NVIDIA LLM analyzes raw packet context + correlated timeline
-5. **Enforcement** — nftables rules for block/throttle/isolate with TTL-based rollback
+4. **AI triage** — the response engine runs NVIDIA LLM triage on every high/critical alert (rule-based fallback without a key); verdicts land on the incident card and in the Audit Log
+5. **Enforcement** — nftables set-based blocks, real rate-limit+drop throttling, account locks; TTL-based auto-rollback survives restarts
 6. **ZeroClaw agents** — 18 TOML-configured hands run deterministic logic on real events
 
 ## Architecture
@@ -87,6 +87,29 @@ sudo setcap cap_net_raw=ep fda-agent   # packet capture without running as root
 ```
 
 The agent captures packets on the default interface, **excludes its own API traffic** (no feedback loop), and POSTs decoded events to the API at `FDA_API_URL` (default http://127.0.0.1:8000/api/events/ingest). Point it at your server with `FDA_API_URL=http://<host>:<port>` and choose the interface with `FDA_AGENT_INTERFACE` (default `lo`).
+
+## Multi-host deployment
+
+One server, N sensors. Build the image once, run the API everywhere you want a dashboard, run the agent on everything you want watched.
+
+```bash
+# 1. Server host (dashboard + detection + AI + enforcement)
+docker compose -f docker-compose.multihost.yml up -d
+
+# 2. Each sensor host — points at the server, captures its own traffic
+FDA_API_URL=http://<server-ip>:8000 FDA_AGENT_INTERFACE=eth0 \
+  docker compose -f docker-compose.multihost.yml --profile sensor up -d fda-agent
+```
+
+The sensor agent (Go, AF_PACKET, needs `NET_RAW`) batches events, excludes its own POST traffic, and **buffers up to 50k events during server outages** instead of dropping them. Scan-detection is tunable per deployment via env vars (see Configuration).
+
+### Bare-metal sensors (no Docker)
+
+```bash
+sudo apt install -y golang && cd agent && go build -o ../bin/fda-agent .
+sudo setcap 'cap_net_raw=+ep' bin/fda-agent     # capture without root
+FDA_API_URL=http://<server-ip>:8000 FDA_AGENT_INTERFACE=eth0 ./bin/fda-agent
+```
 
 ## Screenshots
 
@@ -166,9 +189,20 @@ GET  /                          React frontend (Command Center)
 | `FDA_PORT` | 8000 | API server port |
 | `FDA_AGENT_PORT` | 8001 | Go agent HTTP endpoint |
 | `NVIDIA_API_KEY` | (empty) | Enables AI triage |
-| `NVIDIA_MODEL` | nvidia/nemotron-3.5-lightning-30b-a3b | LLM model |
-| `FDA_RESPONSE_DRY_RUN` | true | Dry-run mode (no nftables changes) |
-| `FDA_RESPONSE_TTL_SECONDS` | 1800 | Enforcement TTL |
+| `NVIDIA_MODEL` | meta/llama-3.2-11b-vision-instruct | LLM model (benchmarked for strict-JSON triage; `nvidia/nemotron-3-super-120b-a12b` is the heavier fallback) |
+| `FDA_RESPONSE_DRY_RUN` | true | Dry-run mode: decisions recorded, nothing enforced |
+| `FDA_RESPONSE_TTL_SECONDS` | 1800 | Enforcement TTL (auto-rollback) |
+| `FDA_RESPONSE_INTERVAL_SECONDS` | 10 | Response engine cycle interval |
+| `FDA_RESPONSE_MAX_ALERTS` | 10 | Alerts triaged per cycle |
+| `FDA_RESPONSE_MIN_CONFIDENCE` | 0.5 | Min AI confidence for auto-execution |
+| `FDA_SCAN_WINDOW_SEC` | 60 | Port-scan sliding window |
+| `FDA_SCAN_PORT_THRESHOLD` | 20 | Distinct TCP ports in window to trigger |
+| `FDA_SCAN_BURST_SEC` | 15 | Ports must be touched within this burst |
+| `FDA_SCAN_COOLDOWN_SEC` | 300 | Min seconds between alerts per source |
+| `FDA_SCAN_SUPPRESS_LOOPBACK` | true | Ignore 127.x→127.x traffic (local chatter) |
+| `FDA_AGENT_BATCH_SIZE` | 10 | Agent: events per POST |
+| `FDA_AGENT_FLUSH_SECONDS` | 2 | Agent: max seconds before a partial flush |
+| `FDA_AGENT_MAX_BUFFERED` | 50000 | Agent: events kept during server outage |
 | `RETENTION_HOURS` | 168 | Event retention (7 days) |
 | `FDA_ES_TIMEOUT_SECONDS` | 30 | ES query timeout |
 
@@ -176,13 +210,14 @@ GET  /                          React frontend (Command Center)
 
 | Action | What it does | Kernel mechanism |
 |--------|-------------|-------------------|
-| `block_source_ip` | Drops all packets from a source IP | `nftables` rule |
-| `throttle_service` | Rate-limits requests per minute | `nftables limit` |
-| `isolate_host` | Drops all traffic to/from an IP | dual `nftables` rules |
+| `block_source_ip` | Drops all packets from a source IP | `nftables` set element |
+| `block_egress` | Drops all traffic leaving the box to a destination IP | `nftables` egress set |
+| `throttle_service` | Rate-limits, drops excess traffic | `nftables limit` + drop rule |
+| `isolate_host` / `quarantine_endpoint` | Drops all traffic to/from an IP | dual `nftables` sets |
 | `disable_account` | Locks a Linux account | `usermod -L` |
 | `observe_only` | Logs only, no enforcement | — |
 
-Every enforcement action has a TTL. After TTL expires, the rule is automatically removed (rollback). Every action is logged to `/tmp/fda-enforcement.log`.
+Every enforcement action has a TTL (default 30 min). After TTL expires, the rollback sweeper removes the rule automatically — including after a restart (expired entries are pruned on boot). Every decision and action is logged to the SQLite store (`control_actions.jsonl` state file) and surfaced in the Audit Log and on the incident card in the UI, in both dry-run and live mode.
 
 ## ZeroClaw Agents
 
@@ -234,8 +269,7 @@ See [DESIGN.md](DESIGN.md) for the full design document including the 11 approve
 
 - `backend/app/core/orchestrator.py`: Real ZeroClaw runtime that loads TOML hands and executes them on live events published from the event bus.
 - `backend/app/core/enforce.py`: Real nftables enforcement with block/throttle/isolate actions, TTL rollback scheduling, and log persistence.
-- `agents/orchestration_engine.py`: Existing Python orchestration implementation used by the standalone runtime and tests.
-- `agents/zeroclaw_daemon.py`: Runtime daemon that runs the full ZeroClaw hand loop and exposes health/run status over HTTP.
+- `agents/orchestration_engine.py`: Python orchestration engine (18 hands) running in-process behind the API; the response engine (`agents/response_engine.py`) handles detect → AI triage → policy-gated enforcement.
 - `app_shared/nvidia_ai.py`: Enhanced AI triage using packet context and correlated timeline with NVIDIA API, including a rule-based offline fallback.
 - `app_shared/unified_store.py`: SQLite storage with zstd-compressed payloads and batch ingestion.
 - `agent/capture/afpacket.go`: Production AF_PACKET capture loop.

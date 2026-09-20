@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
-import requests
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, StreamingResponse
@@ -31,7 +30,7 @@ from backend.app.paths import _ROOT
 from app_shared.unified_store import (
     get_analytics_summary, get_latest_alerts, init_db,
     prune_events, query_events, search_alerts, search_rules,
-    get_kv, set_kv,
+    get_kv, set_kv, update_alert_preview,
     start_run, stop_run, current_run, save_run, run_history,
     find_rule, index_rule, es_available,
 )
@@ -39,6 +38,8 @@ from app_shared.response_policy import (
     choose_action, action_detail, render_command_preview,
     load_policy, save_policy,
 )
+from app_shared.response_state import append_action_log, now_iso as _now_iso
+from app_shared.nvidia_ai import ai_triage, chat_completion
 from app_shared.text_utils import now_utc
 from app_shared.retention import read_retention_hours
 from app_shared.state_paths import read_json, read_jsonl, state_path
@@ -59,12 +60,14 @@ from backend.app.services.event_receiver import (
 )
 from backend.app.services.capture_detection import start_capture_detection, stop_capture_detection
 from backend.app.services.seed_rules import seed_rules
+from agents.response_engine import execute_response_action
+from agents.response_engine import dry_run as response_dry_run
+from agents.response_engine import start_engine_thread, stop_engine_thread
 
 # ---------------------------------------------------------------------------
 # Config
 # ---------------------------------------------------------------------------
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "").strip()
-NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b")
 # Event receiver is always on (no interval needed — it polls queue every 0.5s)
 def _default_frontend_dist() -> Path:
     """Prefer the Next.js static export (frontend/out); fall back to frontend/"""
@@ -137,7 +140,8 @@ def stop_zeroclaw():
 # API helpers
 # ---------------------------------------------------------------------------
 def _build_response_preview(alert: dict) -> dict:
-    tech = alert.get("technique_ids", [])
+    """Build the operator-facing response preview, enriched with AI triage."""
+    tech = alert.get("technique_ids", []) or []
     action = choose_action(tech)
     detail = action_detail(action)
     payload = {
@@ -148,51 +152,28 @@ def _build_response_preview(alert: dict) -> dict:
         "technique_id": tech[0] if tech else "",
     }
     preview_cmd = render_command_preview(action, payload)
-    llm_tech = ""
-    if NVIDIA_API_KEY:
-        try:
-            resp = requests.post(
-                "https://integrate.api.nvidia.com/v1/chat/completions",
-                headers={"Authorization": f"Bearer {NVIDIA_API_KEY}", "Content-Type": "application/json"},
-                json={
-                    "model": NVIDIA_MODEL,
-                    "messages": [
-                        {"role": "system", "content": (
-                            "You are a cybersecurity analyst. Provide a concise technical explanation "
-                            "of the security incident and a non-technical summary for executives. "
-                            "Keep both under 150 words each."
-                        )},
-                        {"role": "user", "content": (
-                            f"Alert: {alert.get('title','')}\n"
-                            f"Message: {alert.get('message','')}\n"
-                            f"Technique IDs: {', '.join(tech)}\n"
-                            f"Severity: {alert.get('severity','medium')}\n"
-                            f"Source IP: {alert.get('source_ip','')}\n"
-                            f"Destination IP: {alert.get('destination_ip','')}\n"
-                            f"Host: {alert.get('host_name','')}\n"
-                            f"Recommended action: {action}"
-                        )},
-                    ],
-                    "max_tokens": 512,
-                    "temperature": 0.3,
-                },
-                timeout=15,
-            )
-            if resp.ok:
-                data = resp.json()
-                content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
-                if content:
-                    llm_tech = content
-        except Exception as exc:
-            logger.debug("NVIDIA API error: %s", exc)
 
+    # AI triage owns the explanations: packet context + correlated timeline +
+    # MITRE mapping, with a deterministic fallback when no API key is set.
+    triage = ai_triage({
+        "title": alert.get("title", ""),
+        "message": alert.get("message", ""),
+        "severity": alert.get("severity", "medium"),
+        "source_ip": alert.get("source_ip", ""),
+        "destination_ip": alert.get("destination_ip", ""),
+        "host_name": alert.get("host_name", ""),
+        "rule_id": alert.get("rule_id", ""),
+        "engine": alert.get("engine", ""),
+        "technique_ids": tech,
+    })
     return {
         "title": detail["title"],
         "summary": detail["summary"],
         "preview_command": preview_cmd,
         "success_criteria": detail["success_criteria"],
-        "technical_explanation": llm_tech or detail["summary"],
-        "nontechnical_explanation": f"Security incident detected. Recommended action: {action.replace('_', ' ')}.",
+        "technical_explanation": triage.get("technical_details") or triage.get("summary") or detail["summary"],
+        "nontechnical_explanation": triage.get("summary") or f"Security incident detected. Recommended action: {action.replace('_', ' ')}.",
+        "ai_triage": triage,
         "playbook": {"sections": []},
     }
 
@@ -229,9 +210,14 @@ def _build_dashboard(start=None, end=None, run_id=None) -> dict:
 # FastAPI app
 # ---------------------------------------------------------------------------
 app = FastAPI(title="FDA Cyber Control (Native IDS)")
+_allowed_origins = [
+    origin.strip() for origin in
+    os.environ.get("FDA_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
+    if origin.strip()
+]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -278,13 +264,16 @@ async def startup():
     start_prune_loop()
     start_capture_detection()
     start_zeroclaw()
+    start_engine_thread()
     threading.Thread(target=_build_dashboard, daemon=True, name="dashboard-warmup").start()
     logger.info("FDA Cyber Control API started")
     logger.info("NVIDIA API: %s", "enabled" if NVIDIA_API_KEY else "disabled")
+    logger.info("Response enforcement: %s", "dry-run" if response_dry_run() else "LIVE")
 
 
 @app.on_event("shutdown")
 async def shutdown():
+    stop_engine_thread()
     stop_event_receiver()
     stop_prune_loop()
     stop_capture_detection()
@@ -455,12 +444,11 @@ async def resolve_query(request: Request):
 
 
 @app.post("/api/chat")
-async def soc_chat(payload: dict, request: Request):
+async def soc_chat(request: Request):
     """SOC investigation chat — Triage + explain an incident. Returns a structured
     answer plus next-actions and evidence references the drawer can render."""
     body = await request.json()
-    message = body.get("message", "")
-    include_llm = bool(NVIDIA_API_KEY)
+    message = str(body.get("message", ""))
     if not message.strip():
         return {"answer": "", "next_actions": [], "llm_generated": False, "references": {}}
     try:
@@ -490,43 +478,31 @@ async def soc_chat(payload: dict, request: Request):
         user_msg = f"Dashboard context:\n{ctx}\n\nQuestion: {message}"
         answer_text = message
         next_actions: list[str] = []
-        resp_ok = False
-        if include_llm:
-            resp = requests.post(
-                "https://integrate.api.nvidia.com/v1/chat/completions",
-                headers={
-                    "Authorization": f"Bearer {NVIDIA_API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={
-                    "model": NVIDIA_MODEL,
-                    "messages": [
-                        {"role": "system", "content": system},
-                        {"role": "user", "content": user_msg},
-                    ],
-                    "max_tokens": 1024,
-                    "temperature": 0.2,
-                },
-                timeout=120,
-            )
-            resp_ok = resp.ok
-            if resp_ok:
-                text = resp.json()["choices"][0]["message"]["content"].strip()
-                # Try to parse the JSON the model emitted.
-                try:
-                    parsed = json.loads(text)
-                    answer_text = parsed.get("answer", text)
-                    next_actions = parsed.get("next_actions", [])
-                    if not isinstance(next_actions, list):
-                        next_actions = []
-                except (json.JSONDecodeError, KeyError, IndexError):
-                    answer_text = text
-            else:
-                answer_text = f"API error {resp.status_code}"
+        llm_generated = False
+        content = chat_completion(
+            messages=[
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ],
+            max_tokens=1024,
+            temperature=0.2,
+            timeout=120,
+        )
+        if content:
+            llm_generated = True
+            # The model is asked for strict JSON; fall back to raw text.
+            try:
+                parsed = json.loads(content)
+                answer_text = parsed.get("answer", content)
+                next_actions = parsed.get("next_actions", [])
+                if not isinstance(next_actions, list):
+                    next_actions = []
+            except (json.JSONDecodeError, KeyError, IndexError):
+                answer_text = content
         return {
             "answer": answer_text,
             "next_actions": next_actions,
-            "llm_generated": include_llm and resp_ok,
+            "llm_generated": llm_generated,
             "references": references,
         }
     except Exception as exc:
@@ -918,12 +894,20 @@ async def execute_response(request: Request) -> dict:
             "executed": [],
             "count": 0,
             "success": False,
-            "dry_run": DRY_RUN,
+            "dry_run": response_dry_run(),
             "results": [{"error": "No actions provided. Expected 'actions' array or 'action' string."}],
         }
 
-    # Import the real response engine
-    from agents.response_engine import execute_response_action, DRY_RUN
+    # Operator policy gate: manual execution can be disabled entirely.
+    policy = load_policy()
+    if not policy.get("allow_manual_execute", True):
+        return {
+            "executed": [],
+            "count": 0,
+            "success": False,
+            "dry_run": response_dry_run(),
+            "results": [{"error": "Manual response execution is disabled by the response policy."}],
+        }
 
     results = []
     for action in actions:
@@ -942,11 +926,43 @@ async def execute_response(request: Request) -> dict:
         results.append(result)
 
     set_kv("response_actions_total", get_kv("response_actions_total", 0) + len(actions))
+
+    # Stamp the originating alert (if any) and audit-log the manual action.
+    alert_id = payload.get("alert_id", "")
+    failed = any(r.get("error") for r in results)
+    executed_any = bool(results) and not failed
+    manual_status = (
+        "failed" if not executed_any
+        else "executed" if not response_dry_run()
+        else "simulated"
+    )
+    if alert_id:
+        update_alert_preview(alert_id, {
+            "status": manual_status,
+            "recommended_action": actions[0],
+            "manual": True,
+            "updated_at": _now_iso(),
+        })
+    append_action_log({
+        "@timestamp": _now_iso(),
+        "action": actions[0],
+        "source_ip": payload.get("source_ip", ""),
+        "destination_ip": payload.get("destination_ip", ""),
+        "rule_id": payload.get("rule_id", ""),
+        "technique_id": payload.get("technique_id", ""),
+        "engine": payload.get("engine", ""),
+        "alert_id": alert_id,
+        "status": manual_status,
+        "message": f"Manual response ({'dry-run' if response_dry_run() else 'LIVE'}): {', '.join(actions)}",
+        "dry_run": response_dry_run(),
+        "execution": results[0] if len(results) == 1 else results,
+    })
+
     return {
         "executed": actions,
         "count": len(actions),
         "success": True,
-        "dry_run": DRY_RUN,
+        "dry_run": response_dry_run(),
         "results": results,
     }
 

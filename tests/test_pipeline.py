@@ -143,7 +143,7 @@ def test_pipeline_end_to_end():
     assert len(ids) == 5
 
     # Verify all events are stored (check DB directly)
-    from app_shared.sqlite_store import init_db, get_conn
+    from app_shared.unified_store import init_db, get_conn
     conn = get_conn()
     row = conn.execute("SELECT COUNT(*) as c FROM events WHERE source = ?", ("capture-agent",)).fetchone()
     count = row["c"] if isinstance(row, dict) else row[0]

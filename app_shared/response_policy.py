@@ -13,6 +13,18 @@ ACTION_LOG_DIR = state_path("response")
 ACTION_MAP_FILE = Path("config/response/actions.yml")
 RESPONSE_INDEX_PREFIX = "security-response"
 
+# The complete set of enforcement actions (matches ACTION_DETAILS keys below
+# and the response engine dispatcher). Single source of truth for validation.
+VALID_ACTIONS: frozenset[str] = frozenset({
+    "block_source_ip",
+    "throttle_service",
+    "disable_account",
+    "isolate_host",
+    "quarantine_endpoint",
+    "block_egress",
+    "observe_only",
+})
+
 DEFAULT_POLICY: dict[str, Any] = {
     # Safe by default: automatic response execution must be an explicit
     # operator decision (Runtime Controls UI), never a factory default.

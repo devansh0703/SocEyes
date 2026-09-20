@@ -1,0 +1,54 @@
+# FDA Cyber Control — multi-host deployment
+#
+# Server host (runs the brain):
+#   docker compose -f docker-compose.multihost.yml up -d
+#   Dashboard/API on port 8000. State in ./state. No packet capture here.
+#
+# Sensor hosts (each monitored machine, incl. other containers/VMs' traffic):
+#   FDA_API_URL=http://<server-ip>:8000 FDA_AGENT_INTERFACE=eth0 \
+#     docker compose -f docker-compose.multihost.yml --profile sensor up -d fda-agent
+#   The agent captures AF_PACKET (needs NET_RAW) and ships batches to the
+#   server; short server outages are buffered, not dropped.
+#
+# Scan-detection tuning (server side, optional):
+#   FDA_SCAN_WINDOW_SEC (60), FDA_SCAN_PORT_THRESHOLD (20),
+#   FDA_SCAN_BURST_SEC (15), FDA_SCAN_COOLDOWN_SEC (300),
+#   FDA_SCAN_SUPPRESS_LOOPBACK (true)
+
+services:
+  fda-server:
+    build: .
+    container_name: fda-server
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      FDA_PORT: "8000"
+      NVIDIA_API_KEY: "${NVIDIA_API_KEY:-}"
+      NVIDIA_MODEL: "${NVIDIA_MODEL:-meta/llama-3.2-11b-vision-instruct}"
+      FDA_RESPONSE_DRY_RUN: "${FDA_RESPONSE_DRY_RUN:-true}"
+      RETENTION_HOURS: "${RETENTION_HOURS:-168}"
+    volumes:
+      - ./state:/data/state
+    env_file:
+      - path: .env
+        required: false
+
+  fda-agent:
+    build: .
+    image: fda-cyber-control:latest
+    container_name: fda-agent
+    restart: unless-stopped
+    profiles: ["sensor"]
+    command: ["/app/bin/fda-agent"]
+    environment:
+      # The agent process exits with a clear message when either is missing.
+      FDA_API_URL: "${FDA_API_URL:-UNSET — set FDA_API_URL=http://<server-ip>:8000}"
+      FDA_AGENT_INTERFACE: "${FDA_AGENT_INTERFACE:-UNSET — set FDA_AGENT_INTERFACE=eth0}"
+      FDA_AGENT_BATCH_SIZE: "${FDA_AGENT_BATCH_SIZE:-10}"
+      FDA_AGENT_FLUSH_SECONDS: "${FDA_AGENT_FLUSH_SECONDS:-2}"
+      FDA_AGENT_MAX_BUFFERED: "${FDA_AGENT_MAX_BUFFERED:-50000}"
+    network_mode: host
+    cap_add:
+      - NET_RAW
+    pid: "host"

@@ -31,7 +31,12 @@ WAL_MAINTENANCE_INTERVAL_SECONDS = int(os.environ.get("FDA_WAL_MAINTENANCE_SECON
 WAL_SOFT_MAX_BYTES = int(os.environ.get("FDA_WAL_SOFT_MAX_BYTES", str(64 * 1024 * 1024)))
 
 _maintenance_thread: threading.Thread | None = None
+# Clear = running. A separate shutdown event is used for sleep/wait so the
+# maintenance loop actually sleeps between checkpoints (Event.wait returns
+# immediately on a set event — using the running flag as the sleep gate
+# turned this loop into a checkpoint spin-loop that starved the GIL).
 _maintenance_running = threading.Event()
+_shutdown = threading.Event()
 _wal_path: str = ""
 
 
@@ -72,7 +77,8 @@ def _maintenance_loop() -> None:
                     conn.close()
             except sqlite3.Error as exc:
                 logger.debug("WAL maintenance checkpoint skipped: %s", exc)
-        _maintenance_running.wait(WAL_MAINTENANCE_INTERVAL_SECONDS)
+        if _shutdown.wait(WAL_MAINTENANCE_INTERVAL_SECONDS):
+            break
 
 
 def start_wal_maintenance(db_path: str | os.PathLike) -> None:
@@ -82,6 +88,7 @@ def start_wal_maintenance(db_path: str | os.PathLike) -> None:
     if _maintenance_thread and _maintenance_thread.is_alive():
         return
     _maintenance_running.set()
+    _shutdown.clear()
     _maintenance_thread = threading.Thread(
         target=_maintenance_loop, daemon=True, name="wal-maintenance"
     )
@@ -94,3 +101,6 @@ def start_wal_maintenance(db_path: str | os.PathLike) -> None:
 
 def stop_wal_maintenance() -> None:
     _maintenance_running.clear()
+    _shutdown.set()
+    if _maintenance_thread and _maintenance_thread.is_alive():
+        _maintenance_thread.join(timeout=5)

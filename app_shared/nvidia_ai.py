@@ -23,6 +23,70 @@ import requests
 
 logger = logging.getLogger("fda.ai_triage")
 
+NVIDIA_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+# Hot-path default: benchmarked 2026-09 on the live catalog — only models that
+# returned valid triage JSON under 10s with no reasoning-token leakage.
+# (`nvidia/nemotron-3.5-lightning-30b-a3b` burns its whole budget on visible
+# chain-of-thought; the "flash" reasoning models exceed 60s; most of the
+# catalog 404s.) Override with NVIDIA_MODEL.
+DEFAULT_MODEL = "meta/llama-3.2-11b-vision-instruct"
+# Heavier fallback with better judgement, opt-in via NVIDIA_MODEL.
+# Note: intermittently 503s and occasionally truncates JSON mid-string.
+FALLBACK_MODEL = "nvidia/nemotron-3-super-120b-a12b"
+
+
+def chat_completion(
+    messages: list[dict[str, str]],
+    model: str = "",
+    max_tokens: int = 512,
+    temperature: float = 0.2,
+    timeout: int = 60,
+    extra_body: dict[str, Any] | None = None,
+) -> str | None:
+    """Call the NVIDIA chat API and return the assistant message content.
+
+    Single shared LLM entry point for the whole codebase. Returns ``None``
+    when the API is unreachable or no key is configured. ``extra_body``
+    allows provider-specific knobs (e.g. ``chat_template_kwargs`` to disable
+    thinking on reasoning models).
+    """
+    api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
+    if not api_key:
+        return None
+    body: dict[str, Any] = {
+        "model": model or os.environ.get("NVIDIA_MODEL", DEFAULT_MODEL),
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+    }
+    if extra_body:
+        body.update(extra_body)
+    try:
+        response = requests.post(
+            NVIDIA_CHAT_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json=body,
+            timeout=timeout,
+        )
+        if not response.ok:
+            logger.debug("NVIDIA API %s: %s", response.status_code, response.text[:200])
+            return None
+        return response.json()["choices"][0]["message"].get("content", "").strip() or None
+    except Exception as exc:
+        logger.debug("NVIDIA API error: %s", exc)
+        return None
+
+
+def _strip_reasoning_blocks(text: str) -> str:
+    """Remove <think>...</think> (and unterminated <think>) blocks."""
+    import re
+
+    text = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    if "<think>" in text:  # unterminated block: keep nothing after the tag
+        text = text.split("<think>", 1)[0]
+    return text.strip()
+
+
 # Cache for LLM responses (avoid duplicate calls for same context)
 _cache: dict[str, tuple[float, dict[str, Any]]] = {}
 _CACHE_TTL = 300  # 5 minutes
@@ -156,11 +220,8 @@ def ai_triage(
     event: dict[str, Any],
     include_llm: bool = True,
     api_key: str = "",
-    model: str = "nvidia/nemotron-3.5-lightning-30b-a3b",
+    model: str = "",
 ) -> dict[str, Any]:
-    # Read API key from environment if not passed explicitly
-    if not api_key:
-        api_key = os.environ.get("NVIDIA_API_KEY", "")
     """Enhanced AI triage with raw packet context and timeline.
 
     Returns structured verdict:
@@ -174,6 +235,9 @@ def ai_triage(
         "llm_generated": true/false,
     }
     """
+    # Read API key from environment if not passed explicitly
+    if not api_key:
+        api_key = os.environ.get("NVIDIA_API_KEY", "")
     # Build enriched context
     packet_ctx = _build_packet_context(event)
     timeline_ctx = _build_timeline_context(event)
@@ -209,9 +273,8 @@ def ai_triage(
 
     # Call NVIDIA LLM with enriched context
     try:
-        body = {
-            "model": model,
-            "messages": [
+        content = chat_completion(
+            messages=[
                 {
                     "role": "system",
                     "content": (
@@ -222,7 +285,8 @@ def ai_triage(
                         "summary (plain English, 1-2 sentences), "
                         "recommended_action (block_source_ip/throttle_service/disable_account/"
                         "isolate_host/quarantine_endpoint/block_egress/observe_only), "
-                        "technical_details (detailed analysis)."
+                        "technical_details (detailed analysis). Only the JSON object — "
+                        "no markdown, no thinking, no explanation."
                     ),
                 },
                 {
@@ -230,30 +294,17 @@ def ai_triage(
                     "content": json.dumps(llm_context, sort_keys=True),
                 },
             ],
-            "temperature": 0.1,
-            "response_format": {"type": "json_object"},
-        }
-
-        response = requests.post(
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=120,
+            model=model,
+            max_tokens=1024,
+            temperature=0.1,
+            # Triage sits in the hot response path: cap at 20s so a degraded
+            # network cannot stall enforcement for minutes.
+            timeout=20,
         )
-        response.raise_for_status()
-        msg = response.json()["choices"][0]["message"]
-        # Some models return reasoning_content separately; skip it
-        raw = msg.get("content", "").strip()
-        # Strip non-JSON reasoning text: find first { and last }
-        if raw and not raw.startswith("{"):
-            start = raw.find("{")
-            end = raw.rfind("}")
-            if start != -1 and end != -1 and end > start:
-                raw = raw[start : end + 1]
-        parsed = json.loads(raw)
+        if content is None:
+            raise RuntimeError("LLM unavailable")
+
+        parsed = _parse_triage_json(content)
 
         result = {
             "verdict": parsed.get("verdict", "unknown"),
@@ -273,6 +324,37 @@ def ai_triage(
         result["llm_error"] = str(exc)
         _set_cached(cache_key, result)
         return result
+
+
+def strip_reasoning(text: str) -> str:
+    """Public wrapper: remove <think>...</think> (and unterminated <think>) blocks."""
+    return _strip_reasoning_blocks(text)
+
+
+def extract_json_object(content: str) -> dict[str, Any]:
+    """Extract the first JSON object from model output.
+
+    Handles <think> blocks and prose wrappers; raises ValueError/
+    json.JSONDecodeError when no parseable object is present (truncation,
+    pure reasoning text).
+    """
+    raw = _strip_reasoning_blocks(content)
+    if not raw.startswith("{"):
+        start = raw.find("{")
+        end = raw.rfind("}")
+        if start == -1 or end <= start:
+            raise ValueError("no JSON object in model output")
+        raw = raw[start : end + 1]
+    return json.loads(raw)
+
+
+def _parse_triage_json(content: str) -> dict[str, Any]:
+    """Extract the triage JSON object from model output.
+
+    Handles <think> blocks, prose wrappers, and raises on truncation
+    (caller falls back to rule-based triage).
+    """
+    return extract_json_object(content)
 
 
 def _rule_based_triage(event: dict[str, Any]) -> dict[str, Any]:

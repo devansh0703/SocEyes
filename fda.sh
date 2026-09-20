@@ -117,7 +117,7 @@ do_install() {
 import sys
 sys.path.insert(0, '.')
 from pathlib import Path
-from app_shared.sqlite_store import init_db
+from app_shared.unified_store import init_db
 from backend.app.services.seed_rules import seed_rules
 init_db()
 print('Indexed:', seed_rules(Path('.')))
@@ -227,39 +227,11 @@ do_start() {
         ok "API already running"
     fi
     
-    # 7. Response Engine
-    if ! is_running response-engine; then
-        info "Starting response engine..."
-        start_service response-engine "$VENV_DIR/bin/python" agents/response_engine.py
-    else
-        ok "Response engine already running"
-    fi
+    # 7. Response engine, orchestration engine, retention pruning and
+    #    ZeroClaw agents all run as in-process threads of the API server —
+    #    no duplicate standalone processes.
     
-    # 8. Orchestration Engine
-    if ! is_running orchestration-engine; then
-        info "Starting orchestration engine..."
-        start_service orchestration-engine "$VENV_DIR/bin/python" agents/orchestration_engine.py
-    else
-        ok "Orchestration engine already running"
-    fi
-    
-    # 9. Retention Cron
-    if ! is_running retention-cron; then
-        info "Starting retention cron..."
-        start_service retention-cron "$VENV_DIR/bin/python" agents/retention_cron.py
-    else
-        ok "Retention cron already running"
-    fi
-    
-    # 10. ZeroClaw Agents
-    if ! is_running zeroclaw-daemon; then
-        if [ -d "$FDA_DIR/zeroclaw" ]; then
-            info "Starting ZeroClaw agent daemon..."
-            start_service zeroclaw-daemon "$VENV_DIR/bin/python" agents/zeroclaw_daemon.py
-        fi
-    fi
-    
-    # 11. Capture agent (packet capture -> /api/events/ingest)
+    # 8. Capture agent (packet capture -> /api/events/ingest)
     if ! is_running capture-agent; then
         AGENT_BIN="$FDA_DIR/bin/fda-agent"
         [ -x "$AGENT_BIN" ] || AGENT_BIN="$FDA_DIR/agent/fda-agent"
@@ -284,7 +256,7 @@ do_start() {
 # ── Stop ──────────────────────────────────────────────────────────────────
 do_stop() {
     echo "Stopping FDA Cyber Control..."
-    for svc in capture-agent zeroclaw-daemon retention-cron orchestration-engine response-engine api suricata wazuh kibana logstash elasticsearch; do
+    for svc in capture-agent api suricata wazuh kibana logstash elasticsearch; do
         stop_service "$svc" 2>/dev/null || true
     done
     echo -e "${GREEN}All services stopped${RESET}"
@@ -301,7 +273,7 @@ do_restart() {
 do_status() {
     echo -e "${BOLD}FDA Cyber Control — Status${RESET}"
     echo "=============================="
-    local services="capture-agent elasticsearch logstash kibana wazuh suricata api response-engine orchestration-engine retention-cron zeroclaw-daemon"
+    local services="capture-agent elasticsearch logstash kibana wazuh suricata api"
     for svc in $services; do
         if is_running "$svc"; then
             local pid; pid=$(cat "$PID_DIR/${svc}.pid" 2>/dev/null)

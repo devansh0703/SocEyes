@@ -1,19 +1,12 @@
 """Unified data layer: Elasticsearch when available, SQLite fallback.
 
-Provides the same public API as ``app_shared.sqlite_store`` so that callers
-(``backend/app/main.py`` and friends) can switch from SQLite-only to a
-transparent ES-first/SQLite-fallback backend by changing only their import
-line:
-
-    from app_shared.unified_store import (
-        init_db, store_event, store_alert, ...   # same names as sqlite_store
-    )
-
-At import time the module pings the configured Elasticsearch cluster once. If
-the ping succeeds every read/write operation is dispatched to Elasticsearch
-first; if the ES call raises an exception the operation transparently falls
-back to the SQLite implementation. When the ping fails the module runs
-entirely in SQLite mode with no ES requests at all (standalone mode).
+This is the single store module for the whole codebase (the former
+``app_shared.sqlite_store`` duplicate was removed). At import time the module
+pings the configured Elasticsearch cluster once. If the ping succeeds every
+read/write operation is dispatched to Elasticsearch first; if the ES call
+raises an exception the operation transparently falls back to the SQLite
+implementation. When the ping fails the module runs entirely in SQLite mode
+with no ES requests at all (standalone mode).
 
 Run-scoped operations (``start_run``/``stop_run``/``current_run``/``save_run``/
 ``run_history``/``set_kv``/``get_kv``) are local-only and always hit SQLite
@@ -88,14 +81,25 @@ def reset_es_cache() -> None:
 
 _lock = threading.RLock()
 _sqlite_conn: sqlite3.Connection | None = None
-_DEFAULT_DB = Path(__file__).resolve().parent.parent / "state" / "fda_events.sqlite"
+
+
+def _default_db() -> Path:
+    """Resolve the events DB path at call time from the configured state root.
+
+    Resolving per call (instead of at import time) keeps ``FDA_STATE_DIR``
+    honored by processes that set it late, and keeps every deployment's data
+    inside the directory the operator actually configured.
+    """
+    from app_shared.state_paths import state_path
+
+    return state_path("fda_events.sqlite")
 
 
 def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
     """Open (or create) the SQLite database and ensure tables exist."""
     global _sqlite_conn
     if db_path is None:
-        db_path = _DEFAULT_DB
+        db_path = _default_db()
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(str(db_path), check_same_thread=False)
@@ -136,6 +140,7 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
         CREATE INDEX IF NOT EXISTS idx_events_run     ON events(run_id);
         CREATE INDEX IF NOT EXISTS idx_events_sev     ON events(severity);
         CREATE INDEX IF NOT EXISTS idx_events_rule    ON events(rule_id);
+        CREATE INDEX IF NOT EXISTS idx_events_src_ts  ON events(source, timestamp);
 
         CREATE TABLE IF NOT EXISTS alerts (
             id        TEXT PRIMARY KEY,
@@ -234,6 +239,33 @@ def _decompress_raw(data: bytes | str) -> str:
         if isinstance(data, bytes):
             return data.decode("utf-8", errors="replace")
         return str(data)
+
+
+def _decode_raw_text(val: bytes | str | None) -> str:
+    """Decode a stored raw payload back to JSON text.
+
+    SQLite stores base64(zstd(json)); legacy rows may hold plain JSON text.
+    """
+    if val is None:
+        return "{}"
+    if isinstance(val, bytes):
+        return _decompress_raw(val)
+    s = val.strip()
+    if s.startswith("{") or s.startswith("["):
+        return s  # legacy plain JSON
+    try:
+        import base64
+        raw_bytes = base64.b64decode(s, validate=True)
+    except Exception:
+        return s  # not base64; return as-is
+    if not raw_bytes:
+        return s
+    try:
+        import zstandard as zstd
+        return zstd.ZstdDecompressor().decompress(raw_bytes).decode("utf-8")
+    except Exception:
+        # base64 of plain UTF-8 (zstd unavailable at write time)
+        return raw_bytes.decode("utf-8", errors="replace")
 
 
 def _parse_iso(ts: str) -> datetime:
@@ -545,7 +577,20 @@ def _source_indices(sources: list[str] | None) -> list[str]:
     return [_SOURCE_INDEX_MAP.get(s, s) for s in sources]
 
 
-def _build_where(start: str | None, end: str | None, run_id: str | None, sources: list[str] | None) -> tuple[str, list]:
+def _build_where(
+    start: str | None,
+    end: str | None,
+    run_id: str | None,
+    indices: list[str] | None,
+    orig_sources: list[str] | None = None,
+) -> tuple[str, list]:
+    """Build the shared WHERE clause.
+
+    Source filtering matches EITHER the logical ``source`` column (what the
+    producer declared, e.g. the capture agent writes index_name=*
+    capture-packets with source=capture) OR the mapped index_name — writers
+    are free to use either convention.
+    """
     clauses: list[str] = ["1=1"]
     args: list = []
     if start:
@@ -557,10 +602,17 @@ def _build_where(start: str | None, end: str | None, run_id: str | None, sources
     if run_id:
         clauses.append("run_id = ?")
         args.append(run_id)
-    if sources:
-        placeholders = ", ".join("?" * len(sources))
-        clauses.append(f"index_name IN ({placeholders})")
-        args.extend(s for s in sources)
+    if indices or orig_sources:
+        source_clauses: list[str] = []
+        if orig_sources:
+            placeholders = ", ".join("?" * len(orig_sources))
+            source_clauses.append(f"source IN ({placeholders})")
+            args.extend(orig_sources)
+        if indices:
+            placeholders = ", ".join("?" * len(indices))
+            source_clauses.append(f"index_name IN ({placeholders})")
+            args.extend(indices)
+        clauses.append("(" + " OR ".join(source_clauses) + ")")
     return " AND ".join(clauses), args
 
 
@@ -573,14 +625,14 @@ def query_events(
     query: str = "",
 ) -> list[dict[str, Any]]:
     """Return raw events.  ES first, SQLite fallback."""
-    indices = _source_indices(sources)
+    indices = _source_indices(sources) if sources else None  # None = all indices
 
     if es_available():
         try:
             from app_shared.es_client import ELASTICSEARCH_URL, get_es_client
             from app_shared.text_utils import clean_text, normalize_severity, deep_get
 
-            index_str = ",".join(indices)
+            index_str = ",".join(indices) if indices else ",".join(_SOURCE_INDEX_MAP.values())
             must: list[dict[str, Any]] = []
 
             # Time range
@@ -668,7 +720,7 @@ def query_events(
             logger.debug("ES query_events failed (%s); falling back to SQLite", exc)
 
     # SQLite fallback
-    where, args = _build_where(start, end, run_id, indices)
+    where, args = _build_where(start, end, run_id, indices, sources)
     sql = f"SELECT * FROM events WHERE {where} ORDER BY timestamp DESC LIMIT ?"
     args.append(limit)
     with _lock:
@@ -680,11 +732,16 @@ def query_events(
         doc: dict[str, Any] = {}
         for key in row.keys():
             val = row[key]
-            if key in ("technique_ids", "raw") and val:
+            if key == "technique_ids" and val:
                 try:
                     val = _json.loads(val)
                 except (ValueError, TypeError):
-                    val = [] if key == "technique_ids" else {}
+                    val = []
+            elif key == "raw" and val:
+                try:
+                    val = _json.loads(_decode_raw_text(val))
+                except (ValueError, TypeError):
+                    val = {}
             doc[key] = val
         if query:
             text = " ".join(
@@ -703,13 +760,13 @@ def count_events(
     run_id: str | None = None,
 ) -> int:
     """Count events.  ES first, SQLite fallback."""
-    indices = _source_indices(sources)
+    indices = _source_indices(sources) if sources else None  # None = all indices
 
     if es_available():
         try:
             from app_shared.es_client import ELASTICSEARCH_URL, get_es_client
 
-            index_str = ",".join(indices)
+            index_str = ",".join(indices) if indices else ",".join(_SOURCE_INDEX_MAP.values())
             must: list[dict[str, Any]] = []
             range_filter: dict[str, Any] = {}
             if start:
@@ -743,7 +800,7 @@ def count_events(
         except Exception as exc:
             logger.debug("ES count_events failed (%s); falling back to SQLite", exc)
 
-    where, args = _build_where(start, end, run_id, indices)
+    where, args = _build_where(start, end, run_id, indices, sources)
     with _lock:
         conn = get_conn()
         row = conn.execute(f"SELECT COUNT(*) as c FROM events WHERE {where}", args).fetchone()
@@ -753,6 +810,30 @@ def count_events(
 # ---------------------------------------------------------------------------
 # Alerts
 # ---------------------------------------------------------------------------
+
+def update_alert_preview(alert_id: str, preview: dict[str, Any]) -> bool:
+    """Merge ``preview`` into an alert's response_preview (e.g. AI triage verdict)."""
+    import json as _json
+
+    with _lock:
+        conn = get_conn()
+        row = conn.execute(
+            "SELECT response_preview FROM alerts WHERE id = ?", (alert_id,)
+        ).fetchone()
+        if not row:
+            return False
+        try:
+            merged = _json.loads(row["response_preview"] or "{}")
+        except (ValueError, TypeError):
+            merged = {}
+        merged.update(preview)
+        conn.execute(
+            "UPDATE alerts SET response_preview = ? WHERE id = ?",
+            (_json.dumps(merged, default=str), alert_id),
+        )
+        conn.commit()
+    return True
+
 
 def search_alerts(
     start: str | None = None,
@@ -874,14 +955,14 @@ def get_analytics_summary(
     run_id: str | None = None,
 ) -> dict[str, Any]:
     """Compute dashboard aggregate stats.  ES first, SQLite fallback."""
-    indices = _source_indices(sources)
+    indices = _source_indices(sources) if sources else None  # None = all indices
 
     if es_available():
         try:
             from app_shared.es_client import ELASTICSEARCH_URL, get_es_client
             from collections import Counter
 
-            index_str = ",".join(indices)
+            index_str = ",".join(indices) if indices else ",".join(_SOURCE_INDEX_MAP.values())
             range_filter: dict[str, Any] = {}
             if start:
                 range_filter["gte"] = start
@@ -989,7 +1070,7 @@ def get_analytics_summary(
             logger.debug("ES get_analytics_summary failed (%s); falling back to SQLite", exc)
 
     # SQLite fallback
-    where, args = _build_where(start, end, run_id, indices)
+    where, args = _build_where(start, end, run_id, indices, sources)
     from collections import Counter
 
     with _lock:

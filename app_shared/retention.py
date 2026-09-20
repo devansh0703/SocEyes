@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta, timezone
 
-from app_shared.sqlite_store import prune_events as _sqlite_prune
+from app_shared.unified_store import prune_events as _store_prune
 
 logger = logging.getLogger("fda.retention")
 
@@ -25,7 +25,7 @@ def read_retention_hours() -> int:
             pass
     
     try:
-        from app_shared.sqlite_store import get_kv
+        from app_shared.unified_store import get_kv
         val = get_kv("retention_hours")
         if val:
             return int(val)
@@ -40,7 +40,7 @@ def prune_old_events(retention_hours: int | None = None) -> dict:
     if retention_hours is None:
         retention_hours = read_retention_hours()
     
-    result = _sqlite_prune(retention_hours)
+    result = _store_prune(retention_hours)
     logger.info("Pruned %d events (cutoff %s)", result.get("events_removed", 0), result.get("cutoff", ""))
     return result
 
@@ -51,7 +51,7 @@ def retention_status() -> dict:
     cutoff = (datetime.now(timezone.utc) - timedelta(hours=retention_hours)).isoformat()
     
     try:
-        from app_shared.sqlite_store import get_conn
+        from app_shared.unified_store import get_conn
         conn = get_conn()
         total = conn.execute("SELECT COUNT(*) as c FROM events").fetchone()["c"]
     except Exception:
@@ -68,7 +68,7 @@ def retention_status() -> dict:
 def set_retention_window(hours: int) -> dict:
     """Update retention window and immediately prune."""
     try:
-        from app_shared.sqlite_store import set_kv
+        from app_shared.unified_store import set_kv
         set_kv("retention_hours", str(hours))
     except Exception:
         pass

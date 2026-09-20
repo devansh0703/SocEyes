@@ -9,12 +9,16 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-import requests
-
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app_shared.mitre_playbooks import load_playbook_excerpt, resolve_playbook_path
-from app_shared.response_policy import RESPONSE_INDEX_PREFIX, action_detail, choose_action, render_command_preview
+from app_shared.response_policy import (
+    RESPONSE_INDEX_PREFIX,
+    VALID_ACTIONS,
+    action_detail,
+    choose_action,
+    render_command_preview,
+)
 from app_shared.state_paths import append_jsonl, state_path
 from common import ELASTICSEARCH_URL, elastic_session
 
@@ -44,9 +48,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def nvidia_summary(incident: dict[str, Any], playbook_excerpt: str) -> str:
-    api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
-    if not api_key:
-        return ""
+    """Terse SOC note for the executed response (shared LLM client)."""
     prompt = {
         "engine": incident["response"]["engine"],
         "rule_id": incident["rule"]["id"],
@@ -56,9 +58,8 @@ def nvidia_summary(incident: dict[str, Any], playbook_excerpt: str) -> str:
         "destination_ip": incident.get("destination", {}).get("ip", ""),
         "message": incident.get("message", ""),
     }
-    body = {
-        "model": os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"),
-        "messages": [
+    return chat_completion(
+        messages=[
             {
                 "role": "system",
                 "content": "Write a terse SOC note. Use 2 sentences max. Do not invent steps outside the provided playbook excerpt.",
@@ -68,32 +69,16 @@ def nvidia_summary(incident: dict[str, Any], playbook_excerpt: str) -> str:
                 "content": json.dumps(prompt, sort_keys=True) + "\n\nPlaybook excerpt:\n" + playbook_excerpt,
             },
         ],
-        "temperature": 0.1,
-    }
-    try:
-        response = requests.post(
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=30,
-        )
-        response.raise_for_status()
-        payload = response.json()
-        return str(payload["choices"][0]["message"]["content"]).strip()
-    except Exception:
-        return ""
+        max_tokens=200,
+        temperature=0.1,
+        timeout=30,
+    ) or ""
 
 
 def nvidia_plan(payload: dict[str, Any], fallback_action: str, playbook_excerpt: str) -> dict[str, Any]:
-    api_key = os.environ.get("NVIDIA_API_KEY", "").strip()
-    if not api_key:
-        return {"action": fallback_action}
-    body = {
-        "model": os.environ.get("NVIDIA_MODEL", "nvidia/nemotron-3.5-lightning-30b-a3b"),
-        "messages": [
+    """LLM-chosen response action with deterministic validation + fallback."""
+    content = chat_completion(
+        messages=[
             {
                 "role": "system",
                 "content": (
@@ -116,41 +101,25 @@ def nvidia_plan(payload: dict[str, Any], fallback_action: str, playbook_excerpt:
                 ),
             },
         ],
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
-    }
-    try:
-        response = requests.post(
-            "https://integrate.api.nvidia.com/v1/chat/completions",
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            json=body,
-            timeout=30,
-        )
-        response.raise_for_status()
-        content = str(response.json()["choices"][0]["message"]["content"]).strip()
-        planned = json.loads(content)
-        action = str(planned.get("action") or fallback_action)
-        if action not in {
-            "block_source_ip",
-            "throttle_service",
-            "disable_account",
-            "isolate_host",
-            "quarantine_endpoint",
-            "block_egress",
-            "observe_only",
-        }:
-            action = fallback_action
-        return {
-            "action": action,
-            "reason": str(planned.get("reason") or ""),
-            "target_path": str(planned.get("target_path") or "/api/login"),
-            "requests_per_minute": int(planned.get("requests_per_minute") or 30),
-        }
-    except Exception:
+        max_tokens=300,
+        temperature=0.1,
+        timeout=30,
+    )
+    if not content:
         return {"action": fallback_action}
+    try:
+        planned = extract_json_object(content)
+    except (ValueError, json.JSONDecodeError):
+        return {"action": fallback_action}
+    action = str(planned.get("action") or fallback_action)
+    if action not in VALID_ACTIONS:
+        action = fallback_action
+    return {
+        "action": action,
+        "reason": str(planned.get("reason") or ""),
+        "target_path": str(planned.get("target_path") or "/api/login"),
+        "requests_per_minute": int(planned.get("requests_per_minute") or 30),
+    }
 
 
 def index_response(doc: dict[str, Any]) -> None:

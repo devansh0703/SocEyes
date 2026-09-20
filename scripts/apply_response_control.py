@@ -3,57 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app_shared.state_paths import append_jsonl, read_json, state_path, write_json
-
-
-STATE_DIR = state_path("response", "runtime")
-ACTION_LOG = state_path("response", "control_actions.jsonl")
-
-FILES = {
-    "block_source_ip": STATE_DIR / "blocked_ips.json",
-    "throttle_service": STATE_DIR / "rate_limits.json",
-    "disable_account": STATE_DIR / "disabled_accounts.json",
-    "isolate_host": STATE_DIR / "isolated_hosts.json",
-    "quarantine_endpoint": STATE_DIR / "quarantined_endpoints.json",
-    "block_egress": STATE_DIR / "egress_blocks.json",
-}
-
-
-def now_iso() -> str:
-    return datetime.now(UTC).isoformat().replace("+00:00", "Z")
-
-
-def load_list(path: Path) -> list[dict[str, Any]]:
-    payload = read_json(path, default=[])
-    return payload if isinstance(payload, list) else []
-
-
-def save_list(path: Path, payload: list[dict[str, Any]]) -> None:
-    write_json(path, payload)
-
-
-def append_action(entry: dict[str, Any]) -> None:
-    append_jsonl(ACTION_LOG, entry)
-
-
-def upsert(path: Path, key_name: str, key_value: str, entry: dict[str, Any]) -> dict[str, Any]:
-    current = load_list(path)
-    updated = False
-    for index, item in enumerate(current):
-        if str(item.get(key_name) or "") == key_value:
-            current[index] = {**item, **entry}
-            updated = True
-            break
-    if not updated:
-        current.append(entry)
-    save_list(path, current)
-    return {"updated": updated, "count": len(current)}
+from app_shared.response_state import FILES, append_action_log, now_iso, upsert
 
 
 def parse_args() -> argparse.Namespace:
@@ -155,7 +109,7 @@ def main() -> int:
         raise SystemExit(f"Unsupported action: {args.action}")
 
     action_record = {"@timestamp": timestamp, **detail, **result}
-    append_action(action_record)
+    append_action_log(action_record)
     print(json.dumps(action_record, sort_keys=True))
     return 0
 

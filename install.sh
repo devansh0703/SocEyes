@@ -107,7 +107,7 @@ cd "$FDA_DIR"
 import sys, yaml
 sys.path.insert(0, '.')
 from pathlib import Path
-from app_shared.sqlite_store import init_db, index_rule
+from app_shared.unified_store import init_db, index_rule
 init_db()
 engines = {}
 
@@ -197,7 +197,7 @@ echo ""
 echo -e "${BOLD}Verification${RESET}"
 RULE_COUNT=$("$VENV_DIR/bin/python" -c "
 import sys; sys.path.insert(0, '.')
-from app_shared.sqlite_store import init_db
+from app_shared.unified_store import init_db
 conn = init_db()
 row = conn.execute('SELECT COUNT(*) as c FROM rules').fetchone()
 print(row['c'])
