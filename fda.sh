@@ -110,44 +110,17 @@ do_install() {
         fi
     fi
     
-    # Bootstrap rules
-    info "Indexing detection rules..."
+    # Bootstrap rules (all four engines via the real seeder)
+    info "Indexing detection rules (sigma, elastic, panther, wazuh)..."
     cd "$FDA_DIR"
     "$VENV_DIR/bin/python" -c "
-import sys, yaml
+import sys
 sys.path.insert(0, '.')
 from pathlib import Path
-from app_shared.sqlite_store import init_db, index_rule
+from app_shared.sqlite_store import init_db
+from backend.app.services.seed_rules import seed_rules
 init_db()
-count = 0
-# Sigma
-for yml in (Path('sigma')/'rules').rglob('*.yml'):
-    try:
-        d = yaml.safe_load(yml.read_text())
-        if isinstance(d, dict) and d.get('id'):
-            index_rule({'rule_id': d['id'], 'engine': 'sigma', 'title': d.get('title',''),
-                        'description': d.get('description',''), 'severity': d.get('level','medium'),
-                        'technique_ids': [], 'file_path': str(yml), 'raw': d})
-            count += 1
-    except: pass
-# Elastic
-try:
-    import tomllib
-except:
-    import tomli as tomllib
-for toml in (Path('detection-rules')/'rules').rgglob('*.toml'):
-    try:
-        with open(toml,'rb') as f: d = tomllib.load(f)
-        r = d.get('rule',{})
-        rid = r.get('rule_id') or r.get('id')
-        if rid:
-            index_rule({'rule_id': rid, 'engine': 'elastic', 'title': r.get('name',''),
-                        'description': r.get('description',''), 'severity': r.get('severity','medium'),
-                        'technique_ids': [t['id'] for th in r.get('threat',[]) for t in th.get('technique',[]) if t.get('id')],
-                        'file_path': str(toml), 'raw': d})
-            count += 1
-    except: pass
-print(f'Indexed {count} rules')
+print('Indexed:', seed_rules(Path('.')))
 "
     
     echo ""
@@ -286,6 +259,20 @@ do_start() {
         fi
     fi
     
+    # 11. Capture agent (packet capture -> /api/events/ingest)
+    if ! is_running capture-agent; then
+        AGENT_BIN="$FDA_DIR/bin/fda-agent"
+        [ -x "$AGENT_BIN" ] || AGENT_BIN="$FDA_DIR/agent/fda-agent"
+        if [ -x "$AGENT_BIN" ]; then
+            info "Starting capture agent ($AGENT_BIN)..."
+            start_service capture-agent "$AGENT_BIN"
+        else
+            warn "Capture agent binary not found — build it with: cd agent && go build -o ../bin/fda-agent ."
+        fi
+    else
+        ok "Capture agent already running"
+    fi
+    
     echo ""
     echo -e "${GREEN}All services started!${RESET}"
     echo "  Dashboard:   http://localhost:8000/"
@@ -297,7 +284,7 @@ do_start() {
 # ── Stop ──────────────────────────────────────────────────────────────────
 do_stop() {
     echo "Stopping FDA Cyber Control..."
-    for svc in zeroclaw-daemon retention-cron orchestration-engine response-engine api suricata wazuh kibana logstash elasticsearch; do
+    for svc in capture-agent zeroclaw-daemon retention-cron orchestration-engine response-engine api suricata wazuh kibana logstash elasticsearch; do
         stop_service "$svc" 2>/dev/null || true
     done
     echo -e "${GREEN}All services stopped${RESET}"
@@ -314,7 +301,7 @@ do_restart() {
 do_status() {
     echo -e "${BOLD}FDA Cyber Control — Status${RESET}"
     echo "=============================="
-    local services="elasticsearch logstash kibana wazuh suricata api response-engine orchestration-engine retention-cron zeroclaw-daemon"
+    local services="capture-agent elasticsearch logstash kibana wazuh suricata api response-engine orchestration-engine retention-cron zeroclaw-daemon"
     for svc in $services; do
         if is_running "$svc"; then
             local pid; pid=$(cat "$PID_DIR/${svc}.pid" 2>/dev/null)

@@ -1065,5 +1065,12 @@ async def serve_spa(full_path: str):
 
 
 if __name__ == "__main__":
+    import os
+
     import uvicorn
-    uvicorn.run("backend.app.main:app", host="0.0.0.0", port=8000, reload=False)
+    uvicorn.run(
+        "backend.app.main:app",
+        host="0.0.0.0",
+        port=int(os.environ.get("FDA_PORT", "8000")),
+        reload=False,
+    )
