@@ -16,7 +16,7 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest import mock
 
-os.environ.setdefault("FDA_STATE_DIR", tempfile.mkdtemp(prefix="fda-response-engine-"))
+os.environ.setdefault("SOC_STATE_DIR", tempfile.mkdtemp(prefix="fda-response-engine-"))
 
 from agents import response_engine  # noqa: E402
 from app_shared import response_policy, response_state  # noqa: E402
@@ -56,7 +56,7 @@ class EngineTestBase(unittest.TestCase):
         llm_patch.start()
         self.addCleanup(llm_patch.stop)
         response_policy.POLICY_STATE_FILE.unlink(missing_ok=True)
-        os.environ.pop("FDA_RESPONSE_DRY_RUN", None)
+        os.environ.pop("SOC_RESPONSE_DRY_RUN", None)
         response_engine._save_processed(set())
         for path in response_state.FILES.values():
             if path.exists():
@@ -64,7 +64,7 @@ class EngineTestBase(unittest.TestCase):
 
     def tearDown(self) -> None:
         response_policy.POLICY_STATE_FILE.unlink(missing_ok=True)
-        os.environ.pop("FDA_RESPONSE_DRY_RUN", None)
+        os.environ.pop("SOC_RESPONSE_DRY_RUN", None)
 
 
 class PolicyGateTests(EngineTestBase):
@@ -158,7 +158,7 @@ class DryRunSafetyTests(EngineTestBase):
         self.assertFalse(response_state.FILES["block_source_ip"].exists())
 
     def test_live_run_writes_control_file(self) -> None:
-        os.environ["FDA_RESPONSE_DRY_RUN"] = "false"
+        os.environ["SOC_RESPONSE_DRY_RUN"] = "false"
         response_engine.execute_response_action(action="block_source_ip", source_ip="203.0.113.61", rule_id="R10")
 
         entries = response_state.load_list(response_state.FILES["block_source_ip"])
@@ -167,7 +167,7 @@ class DryRunSafetyTests(EngineTestBase):
         self.assertIn("ttl_seconds", entries[0])
 
     def test_expired_control_entries_are_pruned(self) -> None:
-        os.environ["FDA_RESPONSE_DRY_RUN"] = "false"
+        os.environ["SOC_RESPONSE_DRY_RUN"] = "false"
         path = response_state.FILES["block_source_ip"]
         now = datetime.now(timezone.utc)
         response_state.save_list(path, [
@@ -192,14 +192,14 @@ class EnforceDispatchTests(unittest.TestCase):
 
         self.assertTrue(result.success)
         self.assertTrue(result.dry_run)
-        self.assertIn("fda_egress_blocked", result.executed_command)
+        self.assertIn("soceyes_egress_blocked", result.executed_command)
 
     def test_block_source_ip_dry_run_uses_timeout_set(self) -> None:
         result = EnforceAction(EnforcementPolicy(
             action="block_source_ip", source_ip="203.0.113.81", ttl_seconds=60, dry_run=True,
         ))
 
-        self.assertIn("fda_blocked_ips", result.executed_command)
+        self.assertIn("soceyes_blocked_ips", result.executed_command)
         self.assertIn("timeout 60s", result.executed_command)
 
     def test_throttle_dry_run_includes_accept_and_drop(self) -> None:
@@ -241,7 +241,7 @@ class RollbackTests(unittest.TestCase):
     def test_pending_rollback_json_round_trip(self) -> None:
         entry = PendingRollback(
             kind="element", rollback_at=123.5, description="block 1.2.3.4",
-            payload={"set_name": "fda_blocked_ips", "element": "1.2.3.4"},
+            payload={"set_name": "soceyes_blocked_ips", "element": "1.2.3.4"},
             log_file="/tmp/x.log",
         )
 

@@ -57,8 +57,8 @@ function timeAgo(iso: string): string {
 }
 
 export default function LandingPage() {
-  const [dashboard, setDashboard] = useCachedState<DashboardPayload | null>("fda-cache:landing-dashboard", null);
-  const [attention, setAttention] = useCachedState<AlertItem[]>("fda-cache:landing-attention", []);
+  const [dashboard, setDashboard] = useCachedState<DashboardPayload | null>("soceyes-cache:landing-dashboard", null);
+  const [attention, setAttention] = useCachedState<AlertItem[]>("soceyes-cache:landing-attention", []);
   const [acting, setActing] = useState("");
 
   useEffect(() => {
@@ -75,8 +75,8 @@ export default function LandingPage() {
         return (a.severity === "high" || a.severity === "critical") && st !== "executed";
       });
       setAttention(open.slice(0, 6));
-      writeCached("fda-cache:landing-dashboard", d);
-      writeCached("fda-cache:landing-attention", open.slice(0, 6));
+      writeCached("soceyes-cache:landing-dashboard", d);
+      writeCached("soceyes-cache:landing-attention", open.slice(0, 6));
     };
     load().catch(() => {});
     const interval = setInterval(() => load().catch(() => {}), 5000);

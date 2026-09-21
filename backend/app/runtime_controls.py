@@ -36,9 +36,9 @@ ISOLATED_HOSTS_FILE = STATE_DIR / "isolated_hosts.json"
 QUARANTINED_ENDPOINTS_FILE = STATE_DIR / "quarantined_endpoints.json"
 
 # Reuse a control-file read for this long before re-checking its mtime.
-CACHE_TTL_SECONDS = float(os.environ.get("FDA_CONTROL_CACHE_TTL_SECONDS", "2.0"))
+CACHE_TTL_SECONDS = float(os.environ.get("SOC_CONTROL_CACHE_TTL_SECONDS", "2.0"))
 # Safety valve for pathological counter cardinality within a single window.
-MAX_COUNTER_KEYS = int(os.environ.get("FDA_RATE_LIMIT_MAX_KEYS", "10000"))
+MAX_COUNTER_KEYS = int(os.environ.get("SOC_RATE_LIMIT_MAX_KEYS", "10000"))
 
 _cache_lock = threading.Lock()
 _list_cache: dict[Path, tuple[float, float, list[dict[str, Any]]]] = {}

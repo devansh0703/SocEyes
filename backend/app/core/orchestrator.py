@@ -41,7 +41,7 @@ from app_shared.response_policy import choose_action, load_policy
 from app_shared.state_paths import state_path
 from app_shared.text_utils import now_utc as now_iso
 
-logger = logging.getLogger("fda.zeroclaw")
+logger = logging.getLogger("soceyes.zeroclaw")
 
 # ---------------------------------------------------------------------------
 # State

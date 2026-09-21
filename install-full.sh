@@ -1,6 +1,6 @@
 #!/bin/bash
 #=============================================================================
-# FDA Cyber Control — Native Full-Stack Installer
+# SocEyes — Native Full-Stack Installer
 #
 # Installs and configures the complete IDS stack natively:
 #   - Elasticsearch 9.x (search engine)
@@ -12,19 +12,19 @@
 #   - Next.js frontend
 #
 # Tested on: Ubuntu 22.04/24.04, Debian 12
-# Usage: sudo ./fda install-full
+# Usage: sudo ./soceyes install-full
 #=============================================================================
 
 set -euo pipefail
 
 # ── Variables ─────────────────────────────────────────────────────────────
-FDA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE_DIR="$FDA_DIR/state"
+SOC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STATE_DIR="$SOC_DIR/state"
 LOG_DIR="$STATE_DIR/logs"
 DATA_DIR="$STATE_DIR/data"
 CONFIG_DIR="$STATE_DIR/config"
 PID_DIR="$STATE_DIR/pids"
-VENV_DIR="$FDA_DIR/.venv-fda"
+VENV_DIR="$SOC_DIR/.venv-soceyes"
 
 ES_VERSION="9.3.2"
 WAZUH_VERSION="4.14.4"
@@ -40,7 +40,7 @@ mkdir -p "$STATE_DIR" "$LOG_DIR" "$DATA_DIR" "$CONFIG_DIR" "$PID_DIR"
 
 # ── Check root for native installs ────────────────────────────────────────
 check_root() {
-    [ "$(id -u)" = "0" ] || fail "Native install requires root. Run: sudo ./fda install-full"
+    [ "$(id -u)" = "0" ] || fail "Native install requires root. Run: sudo ./soceyes install-full"
 }
 
 # ── Detect OS ────────────────────────────────────────────────────────────
@@ -147,7 +147,7 @@ http.port: 9600
 EOF
     
     cat > "$CONFIG_DIR/logstash/pipelines.yml" << EOF
-- pipeline.id: fda-main
+- pipeline.id: soceyes-main
   path.config: "$CONFIG_DIR/logstash/pipeline/*.conf"
 EOF
     
@@ -207,9 +207,9 @@ install_wazuh() {
     apt-get install -y -qq wazuh-manager=$WAZUH_VERSION* 2>/dev/null || apt-get install -y -qq wazuh-manager
     
     # Copy rules/decoders from repo to wazuh
-    if [ -d "$FDA_DIR/wazuh/ruleset/rules" ]; then
-        cp -r "$FDA_DIR/wazuh/ruleset/rules/"* /var/ossec/etc/rules/ 2>/dev/null || true
-        cp -r "$FDA_DIR/wazuh/ruleset/decoders/"* /var/ossec/etc/decoders/ 2>/dev/null || true
+    if [ -d "$SOC_DIR/wazuh/ruleset/rules" ]; then
+        cp -r "$SOC_DIR/wazuh/ruleset/rules/"* /var/ossec/etc/rules/ 2>/dev/null || true
+        cp -r "$SOC_DIR/wazuh/ruleset/decoders/"* /var/ossec/etc/decoders/ 2>/dev/null || true
         ok "Wazuh rules copied from repo"
     fi
     
@@ -273,15 +273,15 @@ install_python_env() {
         ok "venv created"
     fi
     "$VENV_DIR/bin/pip" install --upgrade pip -q
-    "$VENV_DIR/bin/pip" install -r "$FDA_DIR/requirements/api.txt" -q
+    "$VENV_DIR/bin/pip" install -r "$SOC_DIR/requirements/api.txt" -q
     ok "Python dependencies installed"
 }
 
 # ── Create .env ──────────────────────────────────────────────────────────
 create_env() {
-    if [ ! -f "$FDA_DIR/.env" ]; then
-        cat > "$FDA_DIR/.env" << EOF
-# FDA Cyber Control — Native Configuration
+    if [ ! -f "$SOC_DIR/.env" ]; then
+        cat > "$SOC_DIR/.env" << EOF
+# SocEyes — Native Configuration
 ELASTICSEARCH_URL=http://127.0.0.1:9200
 KIBANA_URL=http://127.0.0.1:5601
 ELASTIC_PASSWORD=elastic
@@ -299,10 +299,10 @@ EOF
 
 # ── Build frontend ────────────────────────────────────────────────────────
 build_frontend() {
-    if [ ! -f "$FDA_DIR/frontend/index.html" ] && [ -f "$FDA_DIR/frontend/package.json" ]; then
+    if [ ! -f "$SOC_DIR/frontend/index.html" ] && [ -f "$SOC_DIR/frontend/package.json" ]; then
         if command -v npm >/dev/null 2>&1; then
             info "Building frontend..."
-            (cd "$FDA_DIR/frontend" && npm install --silent 2>/dev/null && npm run build)
+            (cd "$SOC_DIR/frontend" && npm install --silent 2>/dev/null && npm run build)
             ok "frontend built"
         fi
     fi
@@ -311,7 +311,7 @@ build_frontend() {
 # ── Bootstrap detection rules ────────────────────────────────────────────
 bootstrap_rules() {
     info "Indexing detection rules..."
-    cd "$FDA_DIR"
+    cd "$SOC_DIR"
     "$VENV_DIR/bin/python" -c "
 import sys, yaml
 sys.path.insert(0, '.')
@@ -361,7 +361,7 @@ start_all() {
     done
     
     # Start API
-    cd "$FDA_DIR"
+    cd "$SOC_DIR"
     nohup "$VENV_DIR/bin/python" -m uvicorn backend.app.main:app \
         --host 0.0.0.0 --port 8000 > "$LOG_DIR/api.log" 2>&1 &
     echo $! > "$PID_DIR/api.pid"
@@ -376,7 +376,7 @@ start_all() {
 
 # ── Main ──────────────────────────────────────────────────────────────────
 echo ""
-echo -e "${BOLD}FDA Cyber Control — Full Installer${RESET}"
+echo -e "${BOLD}SocEyes — Full Installer${RESET}"
 echo "===================================="
 echo ""
 
@@ -394,4 +394,4 @@ bootstrap_rules
 
 echo ""
 echo -e "${GREEN}Installation complete!${RESET}"
-echo "Start services with: ./fda.sh start"
+echo "Start services with: ./soceyes.sh start"

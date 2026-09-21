@@ -9,8 +9,8 @@ export type GlobalViewState = {
   selectedRunId: string;
 };
 
-const STORAGE_KEY = "fda-global-view-state";
-const EVENT_NAME = "fda:view-state";
+const STORAGE_KEY = "soceyes-global-view-state";
+const EVENT_NAME = "soceyes:view-state";
 
 const DEFAULT_STATE: GlobalViewState = {
   preset: "now-5h",

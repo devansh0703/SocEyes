@@ -1,4 +1,4 @@
-"""Real nftables enforcement for FDA Cyber Control.
+"""Real nftables enforcement for SocEyes.
 
 Executes actual nftables commands to block IPs, throttle services,
 isolate hosts, and cut egress. Every action carries a TTL and rolls back.
@@ -36,18 +36,18 @@ from typing import Any
 
 from app_shared.state_paths import read_json, state_path, write_json
 
-logger = logging.getLogger("fda.enforce")
+logger = logging.getLogger("soceyes.enforce")
 
 # nftables topology: one table, an input+output base chain, one timeout set
 # per containment scope.
-NFT_TABLE = "fda"
-NFT_CHAIN = "fda_enforce"        # input hook (kept for backward compatibility)
-NFT_OUTPUT_CHAIN = "fda_egress"  # output hook
-NFT_SET = "fda_blocked_ips"      # kept for backward compatibility
+NFT_TABLE = "soceyes"
+NFT_CHAIN = "soceyes_enforce"        # input hook (kept for backward compatibility)
+NFT_OUTPUT_CHAIN = "soceyes_egress"  # output hook
+NFT_SET = "soceyes_blocked_ips"      # kept for backward compatibility
 NFT_SETS = {
-    "blocked": "fda_blocked_ips",
-    "isolated": "fda_isolated",
-    "egress": "fda_egress_blocked",
+    "blocked": "soceyes_blocked_ips",
+    "isolated": "soceyes_isolated",
+    "egress": "soceyes_egress_blocked",
 }
 
 # Default TTL for enforcement actions (seconds)
@@ -290,15 +290,15 @@ def stop_rollback_sweeper() -> None:
 # ---------------------------------------------------------------------------
 
 _STATIC_RULES: tuple[tuple[str, list[str]], ...] = (
-    (NFT_CHAIN, ["ip", "saddr", "@fda_blocked_ips", "drop"]),
-    (NFT_CHAIN, ["ip", "saddr", "@fda_isolated", "drop"]),
-    (NFT_CHAIN, ["ip", "daddr", "@fda_isolated", "drop"]),
-    (NFT_OUTPUT_CHAIN, ["ip", "saddr", "@fda_egress_blocked", "drop"]),
+    (NFT_CHAIN, ["ip", "saddr", "@soceyes_blocked_ips", "drop"]),
+    (NFT_CHAIN, ["ip", "saddr", "@soceyes_isolated", "drop"]),
+    (NFT_CHAIN, ["ip", "daddr", "@soceyes_isolated", "drop"]),
+    (NFT_OUTPUT_CHAIN, ["ip", "saddr", "@soceyes_egress_blocked", "drop"]),
 )
 
 
 def _ensure_nftables_setup() -> bool:
-    """Create the fda table, chains, sets and static set-matching rules."""
+    """Create the soceyes table, chains, sets and static set-matching rules."""
     ok, _, err = _run_nft(["list", "table", "inet", NFT_TABLE])
     if not ok:
         ok, _, err = _run_nft(["add", "table", "inet", NFT_TABLE])

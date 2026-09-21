@@ -11,10 +11,10 @@ LOG_CATALOG_INDEX = "log-catalog"
 SOURCE_PATTERNS = [
     "security-response-*",
     "logs-linux.auditd-*",
-    "fda-suricata.eve-*",
+    "soc-suricata.eve-*",
     "custom-generic-*",
     "logs-generic-*",
-    "fda-syslog-*",
+    "soc-syslog-*",
     ".alerts-security.alerts-*",
     "wazuh-alerts-*",
     "wazuh-archives-*",

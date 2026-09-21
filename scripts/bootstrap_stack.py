@@ -29,7 +29,7 @@ def main() -> int:
     ensure_custom_generic_template()
     ensure_kibana_security_indices()
     ensure_data_view("logs-linux.auditd-*", "Linux Auditd Logs")
-    ensure_data_view("fda-suricata.eve-*", "Suricata EVE")
+    ensure_data_view("soc-suricata.eve-*", "Suricata EVE")
     ensure_data_view("custom-generic-*", "Custom Generic Logs")
     ensure_data_view("wazuh-alerts-*", "Wazuh Alerts")
 

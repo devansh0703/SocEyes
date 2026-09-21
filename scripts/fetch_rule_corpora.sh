@@ -1,6 +1,6 @@
 #!/bin/bash
 #=============================================================================
-# FDA Cyber Control — Rule Corpus Fetcher
+# SocEyes — Rule Corpus Fetcher
 #
 # Fetches the vendored detection corpora (gitignored, mounted at runtime):
 #   - SigmaHQ/sigma                     -> sigma/           (community Sigma rules)
@@ -10,21 +10,21 @@
 #
 # Tries a shallow git clone first, then falls back to a GitHub codeload
 # tarball (works where git-over-HTTPS is blocked). Only fetches what is
-# missing, so it is safe to re-run. Skip one with FDA_SKIP_<NAME>=1.
+# missing, so it is safe to re-run. Skip one with SOC_SKIP_<NAME>=1.
 #
 # Usage: ./scripts/fetch_rule_corpora.sh
 #=============================================================================
 set -euo pipefail
 
-FDA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-cd "$FDA_DIR"
+SOC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$SOC_DIR"
 
-BRANCH="${FDA_CORPORA_BRANCH:-master}"
+BRANCH="${SOC_CORPORA_BRANCH:-master}"
 
 fetch() {
     local name="$1" url="$2" dir="$3"
     if [ "${4:-0}" = "skip" ]; then
-        echo "[!] $name skipped (FDA_SKIP_${name^^}=1)"
+        echo "[!] $name skipped (SOC_SKIP_${name^^}=1)"
         return 0
     fi
     if [ -d "$dir" ] && [ -n "$(ls -A "$dir" 2>/dev/null)" ]; then
@@ -56,10 +56,10 @@ fetch() {
 
 failures=0
 
-fetch "Sigma"        "https://github.com/SigmaHQ/sigma.git"                      "sigma"            "${FDA_SKIP_SIGMA:-0}"    || failures=$((failures+1))
-fetch "Elastic"      "https://github.com/elastic/detection-rules.git"            "detection-rules"  "${FDA_SKIP_ELASTIC:-0}"  || failures=$((failures+1))
-fetch "Wazuh"        "https://github.com/wazuh/wazuh-ruleset.git"                "wazuh-ruleset"    "${FDA_SKIP_WAZUH:-0}"    || failures=$((failures+1))
-fetch "Panther"      "https://github.com/panther-labs/panther-analysis.git"      "panther-analysis" "${FDA_SKIP_PANTHER:-0}"  || failures=$((failures+1))
+fetch "Sigma"        "https://github.com/SigmaHQ/sigma.git"                      "sigma"            "${SOC_SKIP_SIGMA:-0}"    || failures=$((failures+1))
+fetch "Elastic"      "https://github.com/elastic/detection-rules.git"            "detection-rules"  "${SOC_SKIP_ELASTIC:-0}"  || failures=$((failures+1))
+fetch "Wazuh"        "https://github.com/wazuh/wazuh-ruleset.git"                "wazuh-ruleset"    "${SOC_SKIP_WAZUH:-0}"    || failures=$((failures+1))
+fetch "Panther"      "https://github.com/panther-labs/panther-analysis.git"      "panther-analysis" "${SOC_SKIP_PANTHER:-0}"  || failures=$((failures+1))
 
 echo ""
 if [ "$failures" -gt 0 ]; then

@@ -1,6 +1,6 @@
-# Fake Attack Generator for FDA Detection System
+# Fake Attack Generator for SocEyes
 
-This script generates realistic fake attacks that will trigger detection rules in the FDA (Forensic Detection Analytics) system.
+This script generates realistic fake attacks that will trigger detection rules in the SocEyes system.
 
 ## Overview
 
@@ -301,13 +301,13 @@ Then register it in `generate_all()` and add to the `AttackType` enum.
 
 **Q: Logs not appearing in Elasticsearch**
 - A: Check that `make up` and `make bootstrap` have completed successfully
-- Check Logstash logs: `docker logs fda-logstash-1`
+- Check Logstash logs: `docker logs soceyes-logstash-1`
 - Verify Wazuh is running: `docker ps | grep wazuh`
 
 **Q: Wazuh alerts not triggering**
 - A: Confirm rules are loaded: Check `config/wazuh/manager/rules/local_rules.xml`
 - Verify rule IDs are correct (100500, 100501, etc.)
-- Check Wazuh manager logs: `docker logs fda-wazuh-manager-1`
+- Check Wazuh manager logs: `docker logs soceyes-wazuh-manager-1`
 
 **Q: Permission denied when writing logs**
 - A: Ensure `ingest/` directory has correct permissions:
@@ -335,4 +335,4 @@ For issues or questions:
 
 ## License
 
-Same as the FDA project.
+Same as the SocEyes project.

@@ -21,7 +21,7 @@ from typing import Any
 
 import requests
 
-logger = logging.getLogger("fda.ai_triage")
+logger = logging.getLogger("soceyes.ai_triage")
 
 NVIDIA_CHAT_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 # Hot-path default: benchmarked 2026-09 on the live catalog — only models that

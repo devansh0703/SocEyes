@@ -13,7 +13,7 @@ from pathlib import Path
 
 from app_shared.unified_store import index_rule
 
-logger = logging.getLogger("fda.services.seed_rules")
+logger = logging.getLogger("soceyes.services.seed_rules")
 
 
 def _load_yaml():

@@ -4,7 +4,7 @@ import os
 import unittest
 
 # Ensure the repo root is importable before the module's own sys.path.insert runs.
-os.environ.setdefault("FDA_STATE_DIR", "/tmp/fda-tests-state")
+os.environ.setdefault("SOC_STATE_DIR", "/tmp/soceyes-tests-state")
 
 from scripts.run_orchestration_engine import (
     _HAND_DISPATCH,

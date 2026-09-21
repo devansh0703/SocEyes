@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FDA Cyber Control — Main API Server (Native IDS)
+SocEyes — Main API Server (Native IDS)
 
 Single-process FastAPI server with SQLite backend.
 Serves frontend, API, attack simulation, and all agent endpoints.
@@ -80,7 +80,7 @@ def _default_frontend_dist() -> Path:
 FRONTEND_DIST = Path(os.environ.get("FRONTEND_DIST", _default_frontend_dist()))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(name)s] %(message)s")
-logger = logging.getLogger("fda.api")
+logger = logging.getLogger("soceyes.api")
 
 # ---------------------------------------------------------------------------
 # Orchestration engine state (the real ZeroClaw engine). Event receiver,
@@ -209,10 +209,10 @@ def _build_dashboard(start=None, end=None, run_id=None) -> dict:
 # ---------------------------------------------------------------------------
 # FastAPI app
 # ---------------------------------------------------------------------------
-app = FastAPI(title="FDA Cyber Control (Native IDS)")
+app = FastAPI(title="SocEyes (Native IDS)")
 _allowed_origins = [
     origin.strip() for origin in
-    os.environ.get("FDA_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
+    os.environ.get("SOC_ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
     if origin.strip()
 ]
 app.add_middleware(
@@ -266,7 +266,7 @@ async def startup():
     start_zeroclaw()
     start_engine_thread()
     threading.Thread(target=_build_dashboard, daemon=True, name="dashboard-warmup").start()
-    logger.info("FDA Cyber Control API started")
+    logger.info("SocEyes API started")
     logger.info("NVIDIA API: %s", "enabled" if NVIDIA_API_KEY else "disabled")
     logger.info("Response enforcement: %s", "dry-run" if response_dry_run() else "LIVE")
 
@@ -296,6 +296,22 @@ def health():
         "zeroclaw": _orch_engine_running,
         "elasticsearch": es_available(),
     }
+
+
+@app.get("/api/threat-intel")
+def threat_intel_status():
+    """Indicator-store stats: how many IOCs are loaded from which feeds."""
+    from app_shared import threat_intel as ti
+
+    return ti.ti_stats()
+
+
+@app.post("/api/threat-intel/refresh")
+def threat_intel_refresh():
+    """Force a feed sync now (bypasses the SOC_TI_SYNC_SEC throttle)."""
+    from app_shared import threat_intel as ti
+
+    return ti.sync_feeds(force=True)
 
 
 @app.get("/api/dashboard")
@@ -470,7 +486,7 @@ async def soc_chat(request: Request):
             )
         )
         system = (
-            "You are FDA Cyber Control's SOC investigation assistant. "
+            "You are SocEyes's SOC investigation assistant. "
             "Return STRICT JSON with these exact keys: answer (string, concise triage + what to do next), "
             "next_actions (list of 2-5 strings, concrete operator actions), "
             "llm_generated (true). No markdown, no backticks, no '```json' wrapper — only the JSON object."
@@ -743,7 +759,7 @@ async def list_packs():
                     "rules_count": rule_count,
                     "category": d.name,
                     "tags": [d.name],
-                    "author": "fda",
+                    "author": "soceyes",
                     "version": "1.0",
                     "updated_at": "",
                 })
@@ -796,7 +812,7 @@ async def marketplace_packs():
                     "rules_count": rule_count,
                     "category": d.name,
                     "tags": [d.name],
-                    "author": "fda",
+                    "author": "soceyes",
                     "version": "1.0",
                 })
     return {"packs": packs}
@@ -1047,7 +1063,7 @@ def index():
         index_file = FRONTEND_DIST / "index.html"
         if index_file.exists():
             return FileResponse(index_file)
-    return HTMLResponse("<h1>FDA Cyber Control</h1><p>Frontend not built.</p>")
+    return HTMLResponse("<h1>SocEyes</h1><p>Frontend not built.</p>")
 
 
 @app.get("/_next/static/{path:path}")
@@ -1087,6 +1103,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "backend.app.main:app",
         host="0.0.0.0",
-        port=int(os.environ.get("FDA_PORT", "8000")),
+        port=int(os.environ.get("SOC_PORT", "8000")),
         reload=False,
     )

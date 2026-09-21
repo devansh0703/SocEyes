@@ -8,7 +8,7 @@ from pathlib import Path
 
 AUDIT_LOG = Path("ingest/auditd/audit.log")
 JSON_LOG = Path("ingest/json/events.jsonl")
-SYSLOG_LOG = Path("ingest/syslog/fda.log")
+SYSLOG_LOG = Path("ingest/syslog/soc.log")
 PCAP_DIR = Path("ingest/pcap")
 
 

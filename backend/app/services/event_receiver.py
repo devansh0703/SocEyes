@@ -1,7 +1,7 @@
 """Background services: event receiver and retention pruning.
 
 Extracted from main.py so the API layer stays thin. Each service owns its
-own thread lifecycle (start/stop) and logs under "fda.services.*".
+own thread lifecycle (start/stop) and logs under "soceyes.services.*".
 """
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from typing import Any
 from app_shared.unified_store import prune_events, store_events_batch
 from app_shared.text_utils import now_utc
 
-logger = logging.getLogger("fda.services.event_receiver")
+logger = logging.getLogger("soceyes.services.event_receiver")
 
 _event_queue: list[dict[str, Any]] = []
 _event_queue_lock = threading.Lock()

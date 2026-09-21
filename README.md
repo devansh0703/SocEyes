@@ -1,4 +1,4 @@
-# FDA Cyber Control
+# SocEyes
 
 Single-box IDS/IPS with AI-driven triage and nftables enforcement. Detects real network traffic, correlates across engines, explains in plain English, and enforces containment on the kernel.
 
@@ -55,8 +55,8 @@ The fetcher pulls the gitignored rule corpora from their upstream repos (shallow
 cp .env.example .env
 # Edit .env:
 #   NVIDIA_API_KEY=your-key-here    (optional, enables AI triage)
-#   FDA_RESPONSE_DRY_RUN=true        (default: true, set false for live enforcement)
-#   FDA_RESPONSE_TTL_SECONDS=1800   (enforcement TTL, default 30 minutes)
+#   SOC_RESPONSE_DRY_RUN=true        (default: true, set false for live enforcement)
+#   SOC_RESPONSE_TTL_SECONDS=1800   (enforcement TTL, default 30 minutes)
 ```
 
 Get an NVIDIA API key at https://integrate.api.nvidia.com/
@@ -64,7 +64,7 @@ Get an NVIDIA API key at https://integrate.api.nvidia.com/
 ### 3. Start
 
 ```bash
-./fda start
+./soceyes start  standalone CLI
 ```
 
 This starts:
@@ -79,12 +79,12 @@ In another terminal (requires root for AF_PACKET):
 
 ```bash
 cd agent
-go build -o fda-agent .
-sudo setcap cap_net_raw=ep fda-agent   # packet capture without running as root
-./fda-agent
+go build -o soceyes-agent .
+sudo setcap cap_net_raw=ep soceyes-agent   # packet capture without running as root
+./soceyes-agent
 ```
 
-The agent captures packets on the default interface, **excludes its own API traffic** (no feedback loop), and POSTs decoded events to the API at `FDA_API_URL` (default http://127.0.0.1:8000/api/events/ingest). Point it at your server with `FDA_API_URL=http://<host>:<port>` and choose the interface with `FDA_AGENT_INTERFACE` (default `lo`).
+The agent captures packets on the default interface, **excludes its own API traffic** (no feedback loop), and POSTs decoded events to the API at `SOC_API_URL` (default http://127.0.0.1:8000/api/events/ingest). Point it at your server with `SOC_API_URL=http://<host>:<port>` and choose the interface with `SOC_AGENT_INTERFACE` (default `lo`).
 
 ## Multi-host deployment
 
@@ -95,8 +95,8 @@ One server, N sensors. Build the image once, run the API everywhere you want a d
 docker compose -f docker-compose.multihost.yml up -d
 
 # 2. Each sensor host — points at the server, captures its own traffic
-FDA_API_URL=http://<server-ip>:8000 FDA_AGENT_INTERFACE=eth0 \
-  docker compose -f docker-compose.multihost.yml --profile sensor up -d fda-agent
+SOC_API_URL=http://<server-ip>:8000 SOC_AGENT_INTERFACE=eth0 \
+  docker compose -f docker-compose.multihost.yml --profile sensor up -d soceyes-agent
 ```
 
 The sensor agent (Go, AF_PACKET, needs `NET_RAW`) batches events, excludes its own POST traffic, and **buffers up to 50k events during server outages** instead of dropping them. Scan-detection is tunable per deployment via env vars (see Configuration).
@@ -104,9 +104,9 @@ The sensor agent (Go, AF_PACKET, needs `NET_RAW`) batches events, excludes its o
 ### Bare-metal sensors (no Docker)
 
 ```bash
-sudo apt install -y golang && cd agent && go build -o ../bin/fda-agent .
-sudo setcap 'cap_net_raw=+ep' bin/fda-agent     # capture without root
-FDA_API_URL=http://<server-ip>:8000 FDA_AGENT_INTERFACE=eth0 ./bin/fda-agent
+sudo apt install -y golang && cd agent && go build -o ../bin/soceyes-agent .
+sudo setcap 'cap_net_raw=+ep' bin/soceyes-agent     # capture without root
+SOC_API_URL=http://<server-ip>:8000 SOC_AGENT_INTERFACE=eth0 ./bin/soceyes-agent
 ```
 
 ## Screenshots
@@ -178,25 +178,25 @@ GET  /                          React frontend (Command Center)
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `FDA_PORT` | 8000 | API server port |
-| `FDA_AGENT_PORT` | 8001 | Go agent HTTP endpoint |
+| `SOC_PORT` | 8000 | API server port |
+| `SOC_AGENT_PORT` | 8001 | Go agent HTTP endpoint |
 | `NVIDIA_API_KEY` | (empty) | Enables AI triage |
 | `NVIDIA_MODEL` | meta/llama-3.2-11b-vision-instruct | LLM model (benchmarked for strict-JSON triage; `nvidia/nemotron-3-super-120b-a12b` is the heavier fallback) |
-| `FDA_RESPONSE_DRY_RUN` | true | Dry-run mode: decisions recorded, nothing enforced |
-| `FDA_RESPONSE_TTL_SECONDS` | 1800 | Enforcement TTL (auto-rollback) |
-| `FDA_RESPONSE_INTERVAL_SECONDS` | 10 | Response engine cycle interval |
-| `FDA_RESPONSE_MAX_ALERTS` | 10 | Alerts triaged per cycle |
-| `FDA_RESPONSE_MIN_CONFIDENCE` | 0.5 | Min AI confidence for auto-execution |
-| `FDA_SCAN_WINDOW_SEC` | 60 | Port-scan sliding window |
-| `FDA_SCAN_PORT_THRESHOLD` | 20 | Distinct TCP ports in window to trigger |
-| `FDA_SCAN_BURST_SEC` | 15 | Ports must be touched within this burst |
-| `FDA_SCAN_COOLDOWN_SEC` | 300 | Min seconds between alerts per source |
-| `FDA_SCAN_SUPPRESS_LOOPBACK` | true | Ignore 127.x→127.x traffic (local chatter) |
-| `FDA_AGENT_BATCH_SIZE` | 10 | Agent: events per POST |
-| `FDA_AGENT_FLUSH_SECONDS` | 2 | Agent: max seconds before a partial flush |
-| `FDA_AGENT_MAX_BUFFERED` | 50000 | Agent: events kept during server outage |
+| `SOC_RESPONSE_DRY_RUN` | true | Dry-run mode: decisions recorded, nothing enforced |
+| `SOC_RESPONSE_TTL_SECONDS` | 1800 | Enforcement TTL (auto-rollback) |
+| `SOC_RESPONSE_INTERVAL_SECONDS` | 10 | Response engine cycle interval |
+| `SOC_RESPONSE_MAX_ALERTS` | 10 | Alerts triaged per cycle |
+| `SOC_RESPONSE_MIN_CONFIDENCE` | 0.5 | Min AI confidence for auto-execution |
+| `SOC_SCAN_WINDOW_SEC` | 60 | Port-scan sliding window |
+| `SOC_SCAN_PORT_THRESHOLD` | 20 | Distinct TCP ports in window to trigger |
+| `SOC_SCAN_BURST_SEC` | 15 | Ports must be touched within this burst |
+| `SOC_SCAN_COOLDOWN_SEC` | 300 | Min seconds between alerts per source |
+| `SOC_SCAN_SUPPRESS_LOOPBACK` | true | Ignore 127.x→127.x traffic (local chatter) |
+| `SOC_AGENT_BATCH_SIZE` | 10 | Agent: events per POST |
+| `SOC_AGENT_FLUSH_SECONDS` | 2 | Agent: max seconds before a partial flush |
+| `SOC_AGENT_MAX_BUFFERED` | 50000 | Agent: events kept during server outage |
 | `RETENTION_HOURS` | 168 | Event retention (7 days) |
-| `FDA_ES_TIMEOUT_SECONDS` | 30 | ES query timeout |
+| `SOC_ES_TIMEOUT_SECONDS` | 30 | ES query timeout |
 
 ## Enforcement Actions
 

@@ -1,4 +1,4 @@
-# TODOS — FDA Cyber Control
+# TODOS — SocEyes
 
 ## P1 (Block ship) — ALL COMPLETE
 
@@ -84,7 +84,7 @@
   ambient noise does not. Unit-tested (ambient/scan/mixed/shuffled).
 - [x] Agent amplification loop: capturing its own POSTs on loopback grew
   exponentially until agent AND server died (377k events in minutes). Agent
-  now derives the API port from FDA_API_URL and drops self-traffic; ingest
+  now derives the API port from SOC_API_URL and drops self-traffic; ingest
   failures are logged (throttled). Rebuilt + running.
 - [x] Stale root-owned agent process (no filter) was flooding the pipeline —
   killed; agent now runs unprivileged via cap_net_raw (setcap in install.sh).
@@ -93,8 +93,8 @@
   rules (total catalog: sigma 3,110 + elastic 1,764 + panther 1,024 + wazuh).
 - [x] Sigma YAMLs with date values crashed JSON serialization and were
   silently skipped — rule raw payloads now sanitized before storage.
-- [x] python -m backend.app.main honors documented FDA_PORT (was hardcoded).
-- [x] fda.sh: capture-agent added as a managed service; install bootstrap
+- [x] python -m backend.app.main honors documented SOC_PORT (was hardcoded).
+- [x] soceyes.sh: capture-agent added as a managed service; install bootstrap
   calls the real 4-engine seeder (inline copy had a broken rgglob call).
 - [x] Response policy factory default auto_execute True -> False (unsafe
   default); operator's persisted choice unchanged.
@@ -143,15 +143,15 @@
       (Logs page crashed on undefined)
 - [x] pack-item / rule-row styles restored (Packs page rows were unstyled
       with overlapping text)
-- [x] next.config: rewrites target FDA_PORT (was hardcoded 8123),
+- [x] next.config: rewrites target SOC_PORT (was hardcoded 8123),
       outputFileTracingRoot set (workspace-root warning)
 - [x] Fresh screenshots of all 13 views captured from live data
       (screenshots/)
 
 ## P9 (Deferred)
 
-- [ ] fda CLI python_bin() falls back to .venv-tools (no uvicorn) when .venv-fda is missing — prefer system python3 in fallback order
-- [ ] API launch is a hand-rolled root process (setsid + /tmp/fda-api-env.txt);
+- [ ] soceyes CLI python_bin() falls back to .venv-tools (no uvicorn) when .venv-soceyes is missing — prefer system python3 in fallback order
+- [ ] API launch is a hand-rolled root process (setsid + /tmp/soceyes-api-env.txt);
       make it a proper systemd unit
 
 ## Verification
@@ -161,7 +161,7 @@
   and captures live loopback traffic
 - nftables enforcement verified with sudo (block_source_ip, isolate_host)
 - All commits on master branch
-- QA 2026-09-20: 10 issues found, 10 fixed, health 31 -> 84 (report: .gstack/qa-reports/qa-report-fda-cyber-control-2026-09-20.md)
+- QA 2026-09-20: 10 issues found, 10 fixed, health 31 -> 84 (report: .gstack/qa-reports/qa-report-soceyes-2026-09-20.md)
 - De-stub + premium pass 2026-09-20: 1024 Panther rules searchable, pack
   zips download, honeypot real data, zero lucide code in bundle,
   simulation:false in health, all 8 pages render with real data

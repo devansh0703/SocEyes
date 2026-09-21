@@ -1,13 +1,13 @@
 #!/bin/bash
 #=============================================================================
-# FDA Cyber Control — Complete IDS Installer
+# SocEyes — Complete IDS Installer
 # Installs and configures all IDS engines: Sigma, Elastic, Wazuh, Suricata
 #=============================================================================
 set -euo pipefail
 
-FDA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE_DIR="$FDA_DIR/state"
-VENV_DIR="$FDA_DIR/.venv-fda"
+SOC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STATE_DIR="$SOC_DIR/state"
+VENV_DIR="$SOC_DIR/.venv-soceyes"
 LOG_DIR="$STATE_DIR/logs"
 
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -18,7 +18,7 @@ warn()  { echo -e "${YELLOW}[!]${RESET} $*"; }
 fail()  { echo -e "${RED}[✗]${RESET} $*"; exit 1; }
 
 echo ""
-echo -e "${BOLD}FDA Cyber Control — Installer${RESET}"
+echo -e "${BOLD}SocEyes — Installer${RESET}"
 echo "=============================="
 echo ""
 
@@ -36,14 +36,14 @@ fi
 
 PIP="$VENV_DIR/bin/python -m pip"
 $PIP install --upgrade pip -q 2>/dev/null
-$PIP install -r "$FDA_DIR/requirements/api.txt" -q 2>/dev/null
+$PIP install -r "$SOC_DIR/requirements/api.txt" -q 2>/dev/null
 ok "Dependencies installed"
 
 # ── Step 2: Configuration ──────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 2: Configuration${RESET}"
-if [ ! -f "$FDA_DIR/.env" ]; then
-    cp "$FDA_DIR/.env.example" "$FDA_DIR/.env"
+if [ ! -f "$SOC_DIR/.env" ]; then
+    cp "$SOC_DIR/.env.example" "$SOC_DIR/.env"
     ok "Created .env"
     warn "Edit .env to set NVIDIA_API_KEY for LLM features"
 fi
@@ -55,10 +55,10 @@ ok "State directories created"
 # ── Step 4: Frontend build ───────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 3: Frontend${RESET}"
-if [ ! -f "$FDA_DIR/frontend/index.html" ] && [ -f "$FDA_DIR/frontend/package.json" ]; then
+if [ ! -f "$SOC_DIR/frontend/index.html" ] && [ -f "$SOC_DIR/frontend/package.json" ]; then
     if command -v npm >/dev/null 2>&1; then
         info "Building frontend..."
-        (cd "$FDA_DIR/frontend" && npm install --silent 2>/dev/null && npm run build)
+        (cd "$SOC_DIR/frontend" && npm install --silent 2>/dev/null && npm run build)
         ok "Frontend built"
     else
         warn "npm not found — frontend will not be available"
@@ -72,15 +72,15 @@ echo ""
 echo -e "${BOLD}Step 5: Go capture agent${RESET}"
 if command -v go >/dev/null 2>&1; then
     info "Building Go agent..."
-    (cd "$FDA_DIR/agent" && go build -o "$FDA_DIR/bin/fda-agent" . 2>/dev/null)
-    if [ -f "$FDA_DIR/bin/fda-agent" ]; then
+    (cd "$SOC_DIR/agent" && go build -o "$SOC_DIR/bin/soceyes-agent" . 2>/dev/null)
+    if [ -f "$SOC_DIR/bin/soceyes-agent" ]; then
         # Packet capture needs CAP_NET_RAW; grant it to the binary so the
         # agent runs unprivileged (no root process in the stack).
-        if sudo -n setcap cap_net_raw=ep "$FDA_DIR/bin/fda-agent" 2>/dev/null \
-            || setcap cap_net_raw=ep "$FDA_DIR/bin/fda-agent" 2>/dev/null; then
-            ok "Go agent built: $FDA_DIR/bin/fda-agent (cap_net_raw granted)"
+        if sudo -n setcap cap_net_raw=ep "$SOC_DIR/bin/soceyes-agent" 2>/dev/null \
+            || setcap cap_net_raw=ep "$SOC_DIR/bin/soceyes-agent" 2>/dev/null; then
+            ok "Go agent built: $SOC_DIR/bin/soceyes-agent (cap_net_raw granted)"
         else
-            ok "Go agent built: $FDA_DIR/bin/fda-agent (run: sudo setcap cap_net_raw=ep $FDA_DIR/bin/fda-agent)"
+            ok "Go agent built: $SOC_DIR/bin/soceyes-agent (run: sudo setcap cap_net_raw=ep $SOC_DIR/bin/soceyes-agent)"
         fi
     else
         warn "Go agent build failed (run 'cd agent && go build' manually)"
@@ -92,9 +92,9 @@ fi
 # ── Step 6: Rule corpora ─────────────────────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 6: Rule corpora${RESET}"
-if [ ! -d "$FDA_DIR/sigma/rules" ] || [ ! -d "$FDA_DIR/panther-analysis/rules" ]; then
+if [ ! -d "$SOC_DIR/sigma/rules" ] || [ ! -d "$SOC_DIR/panther-analysis/rules" ]; then
     info "Fetching detection rule corpora (Sigma, Elastic, Wazuh, Panther)..."
-    bash "$FDA_DIR/scripts/fetch_rule_corpora.sh" || warn "Some corpora failed to fetch — run scripts/fetch_rule_corpora.sh to retry"
+    bash "$SOC_DIR/scripts/fetch_rule_corpora.sh" || warn "Some corpora failed to fetch — run scripts/fetch_rule_corpora.sh to retry"
 else
     ok "Rule corpora already present"
 fi
@@ -102,7 +102,7 @@ fi
 # ── Step 7: Index ALL detection rules ───────────────────────────────────
 echo ""
 echo -e "${BOLD}Step 7: Indexing all IDS rules${RESET}"
-cd "$FDA_DIR"
+cd "$SOC_DIR"
 "$VENV_DIR/bin/python" -c "
 import sys, yaml
 sys.path.insert(0, '.')
@@ -204,7 +204,7 @@ print(row['c'])
 ")
 echo -e "  Rules indexed: ${GREEN}${RULE_COUNT}${RESET}"
 
-if [ -f "$FDA_DIR/bin/fda-agent" ]; then
+if [ -f "$SOC_DIR/bin/soceyes-agent" ]; then
     echo -e "  Go agent: ${GREEN}built${RESET}"
 else
     echo -e "  Go agent: ${YELLOW}not built${RESET} (install Go 1.25+ for packet capture)"
@@ -216,17 +216,17 @@ echo -e "${BOLD}========================${RESET}"
 echo -e "${GREEN}Installation complete!${RESET}"
 echo ""
 echo "Start the server:"
-echo "  ${BOLD}./fda start${RESET}"
+echo "  ${BOLD}./soceyes start${RESET}"
 echo ""
 echo "Then open:"
 echo "  ${CYAN}http://localhost:8000/${RESET}"
 echo ""
 echo "Run the capture agent (requires root):"
-echo "  ${BOLD}sudo ./bin/fda-agent${RESET}"
+echo "  ${BOLD}sudo ./bin/soceyes-agent${RESET}"
 echo ""
 echo "Commands:"
-echo "  ./fda start          Start server"
-echo "  ./fda stop           Stop server"
-echo "  ./fda status         Show status"
-echo "  ./fda logs           View logs"
+echo "  ./soceyes start          Start server"
+echo "  ./soceyes stop           Stop server"
+echo "  ./soceyes status         Show status"
+echo "  ./soceyes logs           View logs"
 echo "========================"

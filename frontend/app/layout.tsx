@@ -5,7 +5,7 @@ import { TopBar } from "../components/top-bar";
 import { RuleExplorerFab } from "../components/rule-explorer-fab";
 
 export const metadata: Metadata = {
-  title: "FDA Cyber Control",
+  title: "SocEyes",
   description: "Realtime detection, mapping, Suricata telemetry, orchestration, and response control",
 };
 
@@ -23,7 +23,7 @@ export default function RootLayout({
               <main className="content-shell">{children}</main>
               <RuleExplorerFab />
               <footer className="footer-bar">
-                FDA Cyber Control — realtime detection and response across Elastic,
+                SocEyes — realtime detection and response across Elastic,
                 Wazuh, Suricata, and packet capture.
               </footer>
             </div>

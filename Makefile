@@ -1,16 +1,16 @@
-# FDA Cyber Control — Standalone Makefile
+# SocEyes — Standalone Makefile
 # No Docker, no Elasticsearch, no JVM.  Single-process Python server.
 
 SHELL := /bin/bash
 PYTHON := python3
-VENV := .venv-fda
-PID_FILE := state/fda_server.pid
+VENV := .venv-soceyes
+PID_FILE := state/soceyes_server.pid
 FRONTEND_OUT := frontend/out
 
 .PHONY: help install start stop restart status logs dashboard stats bootstrap clean agent cloud-check
 
 help:
-	@echo "FDA Cyber Control — Standalone"
+	@echo "SocEyes — Standalone"
 	@echo ""
 	@echo "  make install    - Create .env, set up venv, install deps, build frontend"
 	@echo "  make start      - Start the standalone server"
@@ -25,39 +25,39 @@ help:
 	@echo "  make package    - Build distributable tarball"
 
 install:
-	$(PYTHON) fda install
+	$(PYTHON) soceyes install
 
 start:
-	$(PYTHON) fda start
+	$(PYTHON) soceyes start
 
 stop:
-	$(PYTHON) fda stop
+	$(PYTHON) soceyes stop
 
 restart:
-	$(PYTHON) fda restart
+	$(PYTHON) soceyes restart
 
 status:
-	$(PYTHON) fda status
+	$(PYTHON) soceyes status
 
 logs:
-	@tail -n 100 -f state/fda_server.log 2>/dev/null || echo "No log file"
+	@tail -n 100 -f state/soceyes_server.log 2>/dev/null || echo "No log file"
 
 dashboard:
-	$(PYTHON) fda dashboard
+	$(PYTHON) soceyes dashboard
 
 stats:
-	$(PYTHON) fda stats
+	$(PYTHON) soceyes stats
 
 bootstrap:
-	$(PYTHON) fda bootstrap
+	$(PYTHON) soceyes bootstrap
 
 clean:
-	$(PYTHON) fda clean
+	$(PYTHON) soceyes clean
 
 agent:
 	@echo "Building Go capture agent..."
-	@cd agent && go build -o ../bin/fda-agent ./main.go
-	@echo "Agent built: bin/fda-agent (run with sudo)"
+	@cd agent && go build -o ../bin/soceyes-agent ./main.go
+	@echo "Agent built: bin/soceyes-agent (run with sudo)"
 
 cloud-check:
 	@echo "Running cloud exposure checks..."
@@ -79,41 +79,41 @@ test: compile
 
 package:
 	@echo "Building distributable package..."
-	@rm -rf /tmp/fda-package
-	@mkdir -p /tmp/fda-package
+	@rm -rf /tmp/soceyes-package
+	@mkdir -p /tmp/soceyes-package
 	@if [ ! -d "frontend/out" ] && [ -f "frontend/package.json" ]; then \
 		echo "Building frontend..."; \
 		npm --prefix frontend install 2>/dev/null && npm --prefix frontend run build 2>/dev/null; \
 	fi
 	@# Core source
-	@cp -r backend app_shared scripts zeroclaw agents /tmp/fda-package/
-	@mkdir -p /tmp/fda-package/agent && cp -r agent/capture /tmp/fda-package/agent/ 2>/dev/null || true
-	@cp agent/go.mod /tmp/fda-package/agent/ 2>/dev/null || true
-	@cp -r frontend/out /tmp/fda-package/frontend 2>/dev/null || echo "WARNING: frontend/out not found, run 'npm run build'"
+	@cp -r backend app_shared scripts zeroclaw agents /tmp/soceyes-package/
+	@mkdir -p /tmp/soceyes-package/agent && cp -r agent/capture /tmp/soceyes-package/agent/ 2>/dev/null || true
+	@cp agent/go.mod /tmp/soceyes-package/agent/ 2>/dev/null || true
+	@cp -r frontend/out /tmp/soceyes-package/frontend 2>/dev/null || echo "WARNING: frontend/out not found, run 'npm run build'"
 	@# CLI + config
-	@cp fda fda.sh install.sh install-full.sh Makefile .env.example README.md INSTRUCTIONS.md /tmp/fda-package/ 2>/dev/null || true
+	@cp soceyes soceyes.sh install.sh install-full.sh Makefile .env.example README.md INSTRUCTIONS.md /tmp/soceyes-package/ 2>/dev/null || true
 	@# Vendor rules + playbooks
-	@cp -r vendor /tmp/fda-package/ 2>/dev/null || echo "WARNING: vendor/ not found"
-	@cp -r detection-rules /tmp/fda-package/ 2>/dev/null || echo "WARNING: detection-rules/ not found"
+	@cp -r vendor /tmp/soceyes-package/ 2>/dev/null || echo "WARNING: vendor/ not found"
+	@cp -r detection-rules /tmp/soceyes-package/ 2>/dev/null || echo "WARNING: detection-rules/ not found"
 	@# Wazuh rules + decoders
-	@cp -r wazuh /tmp/fda-package/ 2>/dev/null || echo "WARNING: wazuh/ not found"
+	@cp -r wazuh /tmp/soceyes-package/ 2>/dev/null || echo "WARNING: wazuh/ not found"
 	@# Sigma rules
-	@cp -r sigma /tmp/fda-package/ 2>/dev/null || echo "WARNING: sigma/ not found"
+	@cp -r sigma /tmp/soceyes-package/ 2>/dev/null || echo "WARNING: sigma/ not found"
 	@# Tests
-	@cp -r tests /tmp/fda-package/ 2>/dev/null || true
+	@cp -r tests /tmp/soceyes-package/ 2>/dev/null || true
 	@# Requirements
-	@cp -r requirements /tmp/fda-package/ 2>/dev/null || true
+	@cp -r requirements /tmp/soceyes-package/ 2>/dev/null || true
 	@# ── Exclude Docker files ──
-	@rm -f /tmp/fda-package/Dockerfile.* 2>/dev/null || true
-	@rm -f /tmp/fda-package/docker-compose*.yml 2>/dev/null || true
+	@rm -f /tmp/soceyes-package/Dockerfile.* 2>/dev/null || true
+	@rm -f /tmp/soceyes-package/docker-compose*.yml 2>/dev/null || true
 	@# ── Exclude state/runtime dirs ──
-	@rm -rf /tmp/fda-package/state
+	@rm -rf /tmp/soceyes-package/state
 	@# ── Exclude IDE/cache ──
-	@rm -rf /tmp/fda-package/.venv* /tmp/fda-package/.pytest_cache /tmp/fda-package/__pycache__
-	@find /tmp/fda-package -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
-	@find /tmp/fda-package -name "*.pyc" -delete 2>/dev/null || true
+	@rm -rf /tmp/soceyes-package/.venv* /tmp/soceyes-package/.pytest_cache /tmp/soceyes-package/__pycache__
+	@find /tmp/soceyes-package -name "__pycache__" -type d -exec rm -rf {} + 2>/dev/null || true
+	@find /tmp/soceyes-package -name "*.pyc" -delete 2>/dev/null || true
 	@# ── Create tarball ──
-	@tar czf /tmp/fda-cyber-control-linux-x86_64.tar.gz -C /tmp/fda-package .
-	@rm -rf /tmp/fda-package
-	@echo "Package: /tmp/fda-cyber-control-linux-x86_64.tar.gz"
-	@echo "Size: $$(du -h /tmp/fda-cyber-control-linux-x86_64.tar.gz | cut -f1)"
+	@tar czf /tmp/soceyes-linux-x86_64.tar.gz -C /tmp/soceyes-package .
+	@rm -rf /tmp/soceyes-package
+	@echo "Package: /tmp/soceyes-linux-x86_64.tar.gz"
+	@echo "Size: $$(du -h /tmp/soceyes-linux-x86_64.tar.gz | cut -f1)"

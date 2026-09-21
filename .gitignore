@@ -89,3 +89,10 @@ frontend/dist/
 frontend/coverage/
 frontend/*.log
 *.tsbuildinfo
+
+# Frontend dependencies — never commit.
+website/node_modules/
+website/.next/
+website/out/
+website/dist/
+website/*.log

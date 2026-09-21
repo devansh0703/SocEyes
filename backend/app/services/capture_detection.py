@@ -11,14 +11,14 @@ Extracted from main.py so the API layer stays thin. Owns two detection phases:
 Correctness rules enforced here:
 - Events are fetched by watermark (last processed timestamp), persisted in
   state_kv, so restarts never replay old events into duplicate alerts.
-- Synthetic events produced by this module are stored under the fda-internal
+- Synthetic events produced by this module are stored under the soc-internal
   source so phase 2 never re-ingests its own output (no feedback loops).
 - Port-scan alerts are rate-limited per source (SCAN_COOLDOWN_SEC) and
   require burst density: the distinct ports must be touched within a short
   sub-burst (SCAN_BURST_SEC). Ambient traffic spreads over the window and
   does not alert; scans do.
 
-Logs under "fda.services.capture_detection".
+Logs under "soceyes.services.capture_detection".
 """
 from __future__ import annotations
 
@@ -34,7 +34,7 @@ from app_shared.response_policy import action_detail, choose_action, render_comm
 from app_shared.state_paths import state_path
 from app_shared.unified_store import exfil_volumes, get_kv, query_events, set_kv, store_alert, store_event
 
-logger = logging.getLogger("fda.services.capture_detection")
+logger = logging.getLogger("soceyes.services.capture_detection")
 
 _CAPTURE_DETECT_RUNNING = threading.Event()
 _capture_detect_thread: threading.Thread | None = None
@@ -42,22 +42,28 @@ _capture_detect_thread: threading.Thread | None = None
 # --- port-scan detection tuning -------------------------------------------
 # All knobs env-tunable so operators can match their traffic profile without
 # a redeploy (correlation tuning).
+# Legacy note: pre-rebrand deployments set SOC_* names; both are honored
+# (SOC_* wins) so existing systemd units and compose files keep working.
+def _env(name: str, default: str) -> str:
+    return os.environ.get(name) or os.environ.get(name.replace("SOC_", "SOC_", 1)) or default
+
+
 def _env_int(name: str, default: int) -> int:
     try:
-        return int(os.environ.get(name, "") or default)
+        return int(_env(name, str(default)))
     except (TypeError, ValueError):
         return default
 
 
-_SCAN_WINDOW_SEC = _env_int("FDA_SCAN_WINDOW_SEC", 60)       # sliding window for distinct-port counting
-_SCAN_PORT_THRESHOLD = _env_int("FDA_SCAN_PORT_THRESHOLD", 20)  # distinct TCP dst ports in window => scan
-_SCAN_BURST_SEC = _env_int("FDA_SCAN_BURST_SEC", 15)         # those ports must be touched within this burst
-_SCAN_COOLDOWN_SEC = _env_int("FDA_SCAN_COOLDOWN_SEC", 300)  # min seconds between alerts for the same source
-_SCAN_READ_LIMIT = _env_int("FDA_SCAN_READ_LIMIT", 20000)    # max events read per detector pass
+_SCAN_WINDOW_SEC = _env_int("SOC_SCAN_WINDOW_SEC", 60)       # sliding window for distinct-port counting
+_SCAN_PORT_THRESHOLD = _env_int("SOC_SCAN_PORT_THRESHOLD", 20)  # distinct TCP dst ports in window => scan
+_SCAN_BURST_SEC = _env_int("SOC_SCAN_BURST_SEC", 15)         # those ports must be touched within this burst
+_SCAN_COOLDOWN_SEC = _env_int("SOC_SCAN_COOLDOWN_SEC", 300)  # min seconds between alerts for the same source
+_SCAN_READ_LIMIT = _env_int("SOC_SCAN_READ_LIMIT", 20000)    # max events read per detector pass
 # Loopback-to-loopback traffic is local service chatter, not reconnaissance;
 # counting it false-positives constantly on busy hosts. Disable suppression
 # only when deliberately testing scan detection on loopback.
-_SCAN_SUPPRESS_LOOPBACK = os.environ.get("FDA_SCAN_SUPPRESS_LOOPBACK", "true").lower() in ("true", "1", "yes")
+_SCAN_SUPPRESS_LOOPBACK = os.environ.get("SOC_SCAN_SUPPRESS_LOOPBACK", "true").lower() in ("true", "1", "yes")
 
 # Self-block safety net: the local host's own addresses (learned at loop
 # start from the routing table) are never emitted as scan sources. A
@@ -79,34 +85,34 @@ def _refresh_self_ips() -> None:
 # --- SSH brute-force detection tuning ---------------------------------------
 # Repeated connection attempts to a single SSH port: real logins are rare;
 # credential-stuffing retries dozens of times per minute.
-_BRUTE_WINDOW_SEC = _env_int("FDA_BRUTE_WINDOW_SEC", 120)     # sliding window for attempts
-_BRUTE_THRESHOLD = _env_int("FDA_BRUTE_THRESHOLD", 15)        # SYN attempts to port 22 => brute force
-_BRUTE_COOLDOWN_SEC = _env_int("FDA_BRUTE_COOLDOWN_SEC", 300)
+_BRUTE_WINDOW_SEC = _env_int("SOC_BRUTE_WINDOW_SEC", 120)     # sliding window for attempts
+_BRUTE_THRESHOLD = _env_int("SOC_BRUTE_THRESHOLD", 15)        # SYN attempts to port 22 => brute force
+_BRUTE_COOLDOWN_SEC = _env_int("SOC_BRUTE_COOLDOWN_SEC", 300)
 
 # --- SYN flood detection tuning ---------------------------------------------
 # Half-open SYN storm against one port: more than N SYNs/sec to a single
 # dst port with no completed handshakes observed is a flood signature.
-_FLOOD_WINDOW_SEC = _env_int("FDA_FLOOD_WINDOW_SEC", 10)
-_FLOOD_THRESHOLD = _env_int("FDA_FLOOD_THRESHOLD", 100)       # SYNs to one port within window
-_FLOOD_COOLDOWN_SEC = _env_int("FDA_FLOOD_COOLDOWN_SEC", 300)
+_FLOOD_WINDOW_SEC = _env_int("SOC_FLOOD_WINDOW_SEC", 10)
+_FLOOD_THRESHOLD = _env_int("SOC_FLOOD_THRESHOLD", 100)       # SYNs to one port within window
+_FLOOD_COOLDOWN_SEC = _env_int("SOC_FLOOD_COOLDOWN_SEC", 300)
 
 # --- C2 beaconing detection tuning -----------------------------------------
 # A command-and-control implant checks in on a fixed schedule. Random human
 # traffic has irregular timing; beacon flows show near-constant intervals
 # (low jitter) across many connections inside the window.
-_BEACON_WINDOW_SEC = _env_int("FDA_BEACON_WINDOW_SEC", 600)     # analysis window
-_BEACON_MIN_CONNECTIONS = _env_int("FDA_BEACON_MIN_CONNECTIONS", 8)  # SYNs per flow
-_BEACON_MAX_JITTER = 0.25 if not os.environ.get("FDA_BEACON_MAX_JITTER") else float(os.environ["FDA_BEACON_MAX_JITTER"])
+_BEACON_WINDOW_SEC = _env_int("SOC_BEACON_WINDOW_SEC", 600)     # analysis window
+_BEACON_MIN_CONNECTIONS = _env_int("SOC_BEACON_MIN_CONNECTIONS", 8)  # SYNs per flow
+_BEACON_MAX_JITTER = 0.25 if not (os.environ.get("SOC_BEACON_MAX_JITTER") or os.environ.get("SOC_BEACON_MAX_JITTER")) else float(os.environ.get("SOC_BEACON_MAX_JITTER") or os.environ.get("SOC_BEACON_MAX_JITTER"))
 _BEACON_MIN_INTERVAL_SEC = 0.5    # below this, regularity is keepalive chatter
 _BEACON_MAX_INTERVAL_SEC = 3600.0
-_BEACON_COOLDOWN_SEC = _env_int("FDA_BEACON_COOLDOWN_SEC", 1800)
+_BEACON_COOLDOWN_SEC = _env_int("SOC_BEACON_COOLDOWN_SEC", 1800)
 
 # --- data exfiltration tuning -----------------------------------------------
 # One source pushing an unusual volume to a single destination inside the
 # window: staging + upload, or a compromised host streaming data out.
-_EXFIL_WINDOW_SEC = _env_int("FDA_EXFIL_WINDOW_SEC", 60)
-_EXFIL_BYTES_THRESHOLD = _env_int("FDA_EXFIL_BYTES_THRESHOLD", 100_000_000)  # 100 MB / window
-_EXFIL_COOLDOWN_SEC = _env_int("FDA_EXFIL_COOLDOWN_SEC", 600)
+_EXFIL_WINDOW_SEC = _env_int("SOC_EXFIL_WINDOW_SEC", 60)
+_EXFIL_BYTES_THRESHOLD = _env_int("SOC_EXFIL_BYTES_THRESHOLD", 100_000_000)  # 100 MB / window
+_EXFIL_COOLDOWN_SEC = _env_int("SOC_EXFIL_COOLDOWN_SEC", 600)
 
 # --- rule-match phase tuning ----------------------------------------------
 _MATCH_WATERMARK_KEY = "capture_detection.match_watermark"
@@ -152,10 +158,29 @@ def _detect_from_capture_loop() -> None:
             _detect_data_exfil()
             _detect_rule_matches()
             _match_alerts_to_rules()
+            _sync_threat_intel()
         except Exception as exc:
             logger.warning("Capture detection error: %s", exc)
 
         time.sleep(10)
+
+
+def _sync_threat_intel() -> None:
+    """Periodically refresh threat-intel feeds (abuse.ch Feodo/URLhaus + custom).
+
+    sync_feeds is internally throttled by SOC_TI_SYNC_SEC (default 6h); this
+    call just gives it a heartbeat every detection pass. Enrich-index rules
+    only fire when the indicator store has data, so a dead feed silently
+    disables that detection surface — surface failures in the log.
+    """
+    try:
+        from app_shared import threat_intel as _ti
+
+        stats = _ti.sync_feeds()
+        if stats:
+            logger.info("Threat-intel feed sync: %s", stats)
+    except Exception as exc:
+        logger.warning("Threat-intel sync failed: %s", exc)
 
 
 def _parse_event_ts(value) -> float:
@@ -300,8 +325,8 @@ def _emit_capture_alert(
     ts = datetime.now(timezone.utc).isoformat()
     tech = [technique_id]
     store_event(
-        "fda-internal", "fda-detection",
-        engine="fda-internal", title=title, message=message,
+        "soc-internal", "soc-detection",
+        engine="soc-internal", title=title, message=message,
         severity=severity, rule_id=f"CAPTURE-{technique_id}",
         source_ip=src_ip, destination_ip=dst_ip, technique_ids=tech, timestamp=ts,
     )
@@ -650,10 +675,10 @@ def _load_rule_matches(db_path, ids_alerts, matched_alerts) -> dict[str, list[sq
 
 # --- direct rule-engine phase (every indexed rule evaluated on events) ----
 _RULE_ENGINE_WATERMARK_KEY = "capture_detection.rule_engine_watermark"
-_RULE_ENGINE_BATCH = _env_int("FDA_RULE_ENGINE_BATCH", 200)
-_RULE_ENGINE_MAX_ALERTS_PER_PASS = _env_int("FDA_RULE_ENGINE_MAX_ALERTS", 25)
-_RULE_ENGINE_RELOAD_SEC = _env_int("FDA_RULE_ENGINE_RELOAD_SEC", 300)
-_RULE_ENGINE_ALERT_COOLDOWN = _env_int("FDA_RULE_ENGINE_COOLDOWN_SEC", 900)  # per rule_id
+_RULE_ENGINE_BATCH = _env_int("SOC_RULE_ENGINE_BATCH", 200)
+_RULE_ENGINE_MAX_ALERTS_PER_PASS = _env_int("SOC_RULE_ENGINE_MAX_ALERTS", 25)
+_RULE_ENGINE_RELOAD_SEC = _env_int("SOC_RULE_ENGINE_RELOAD_SEC", 300)
+_RULE_ENGINE_ALERT_COOLDOWN = _env_int("SOC_RULE_ENGINE_COOLDOWN_SEC", 900)  # per rule_id
 
 _rule_engine_lock = threading.Lock()
 _rule_engine_catalog = None
@@ -750,7 +775,7 @@ def _detect_rule_matches() -> None:
             )
 
             store_event(
-                "fda-internal", "fda-detection",
+                "soc-internal", "soc-detection",
                 engine="rule-engine",
                 title=title,
                 message=message,
@@ -823,7 +848,7 @@ def _match_alerts_to_rules() -> None:
         if src and src != "0.0.0.0" and port:
             ip_ports.setdefault(src, set()).add(port)
 
-    db_path = state_path("fda_events.sqlite")
+    db_path = state_path("soceyes_events.sqlite")
     if not db_path or not os.path.exists(db_path):
         return
 
@@ -875,10 +900,10 @@ def _match_alerts_to_rules() -> None:
                     f"Source: {source_ip or 'unknown'}, Host: {host_name or 'unknown'}{port_context}."
                 )
 
-                # fda-internal source: enrichment output is never re-ingested.
+                # soc-internal source: enrichment output is never re-ingested.
                 store_event(
-                    "fda-internal", "fda-detection",
-                    engine="fda-internal",
+                    "soc-internal", "soc-detection",
+                    engine="soc-internal",
                     title=alert_title,
                     message=alert_message,
                     severity=severity,

@@ -98,7 +98,7 @@ function KpiTile({ label, value, delta, data, color }: {
 
 export function DashboardView() {
   const [viewState] = useGlobalViewState();
-  const [data, setData] = useCachedState<DashboardPayload | null>("fda-cache:dashboard-view", null);
+  const [data, setData] = useCachedState<DashboardPayload | null>("soceyes-cache:dashboard-view", null);
   const [error, setError] = useState("");
 
   useEffect(() => {
@@ -110,7 +110,7 @@ export function DashboardView() {
         const payload = await apiFetch<DashboardPayload>(`/api/dashboard?${query}`);
         if (!active) return;
         setData(payload);
-        writeCached("fda-cache:dashboard-view", payload);
+        writeCached("soceyes-cache:dashboard-view", payload);
       } catch (loadError) {
         if (active) setError(loadError instanceof Error ? loadError.message : "Failed to load command center");
       }

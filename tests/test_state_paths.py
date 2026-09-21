@@ -9,7 +9,7 @@ import threading
 import unittest
 from pathlib import Path
 
-os.environ["FDA_STATE_DIR"] = tempfile.mkdtemp(prefix="fda-state-paths-")
+os.environ["SOC_STATE_DIR"] = tempfile.mkdtemp(prefix="fda-state-paths-")
 
 from app_shared import state_paths  # noqa: E402
 
@@ -17,21 +17,21 @@ from app_shared import state_paths  # noqa: E402
 class StatePathTests(unittest.TestCase):
     def setUp(self) -> None:
         self.root = Path(tempfile.mkdtemp(prefix="fda-state-root-"))
-        self._previous = os.environ["FDA_STATE_DIR"]
-        os.environ["FDA_STATE_DIR"] = str(self.root)
+        self._previous = os.environ["SOC_STATE_DIR"]
+        os.environ["SOC_STATE_DIR"] = str(self.root)
 
     def tearDown(self) -> None:
-        os.environ["FDA_STATE_DIR"] = self._previous
+        os.environ["SOC_STATE_DIR"] = self._previous
 
     def test_state_path_lives_under_the_configured_root(self) -> None:
         self.assertEqual(state_paths.state_path("response", "policy.json"), self.root / "response" / "policy.json")
 
     def test_state_root_defaults_to_in_repo_directory(self) -> None:
-        del os.environ["FDA_STATE_DIR"]
+        del os.environ["SOC_STATE_DIR"]
         try:
             self.assertEqual(state_paths.state_root(), Path("state"))
         finally:
-            os.environ["FDA_STATE_DIR"] = str(self.root)
+            os.environ["SOC_STATE_DIR"] = str(self.root)
 
     def test_write_json_round_trips_and_leaves_no_temp_files(self) -> None:
         target = state_paths.state_path("demo", "current.json")

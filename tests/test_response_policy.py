@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-os.environ["FDA_STATE_DIR"] = tempfile.mkdtemp(prefix="fda-response-policy-")
+os.environ["SOC_STATE_DIR"] = tempfile.mkdtemp(prefix="fda-response-policy-")
 
 from app_shared import response_policy  # noqa: E402
 from app_shared.state_paths import read_jsonl  # noqa: E402

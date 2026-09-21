@@ -70,7 +70,7 @@ export function TopBar() {
     <header className="topbar">
       <div className="topbar-brand">
         <div className="topbar-mark" />
-        <span>FDA CYBER CONTROL</span>
+        <span>SOCEYES</span>
       </div>
 
       <div className="topbar-telemetry">

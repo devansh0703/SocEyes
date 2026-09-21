@@ -1,4 +1,4 @@
-# FDA Cyber Control — Installation
+# SocEyes — Installation
 
 ## Prerequisites
 
@@ -12,7 +12,7 @@ You need:
 ### 1. Install
 
 ```bash
-fda install
+./soceyes install          # CLI file kept; prints "SocEyes"
 ```
 
 This creates a Python virtual environment, installs dependencies, and builds the web frontend.
@@ -31,7 +31,7 @@ Get your key at: https://integrate.api.nvidia.com/
 ### 3. Start
 
 ```bash
-fda start
+./soceyes start
 ```
 
 The server starts on `http://localhost:8000/`
@@ -44,21 +44,21 @@ The server starts on `http://localhost:8000/`
 Index detection rules from vendor directories:
 
 ```bash
-fda bootstrap
+./soceyes bootstrap
 ```
 
 ## Server Commands
 
 | Command | Description |
 |---------|-------------|
-| `fda start` | Start the server |
-| `fda stop` | Stop the server |
-| `fda restart` | Restart the server |
-| `fda status` | Show health + DB stats |
-| `fda logs -n 50` | Tail server logs |
-| `fda stats` | Process resource usage |
-| `fda dashboard` | Open web UI |
-| `fda clean` | Remove all runtime state |
+| `./soceyes start` | Start the server (SocEyes CLI) |
+| `./soceyes stop` | Stop the server |
+| `./soceyes restart` | Restart the server |
+| `./soceyes status` | Show health + DB stats |
+| `./soceyes logs -n 50` | Tail server logs |
+| `./soceyes stats` | Process resource usage |
+| `./soceyes dashboard` | Open web UI |
+| `./soceyes clean` | Remove all runtime state |
 
 ## Architecture
 
@@ -137,7 +137,7 @@ Designed to run on minimal hardware:
 ## Configuration (`.env`)
 
 ```env
-FDA_PORT=8000
+SOC_PORT=8000
 NVIDIA_API_KEY=your-key-here
 NVIDIA_MODEL=nvidia/nemotron-3.5-lightning-30b-a3b
 RETENTION_HOURS=24
@@ -148,15 +148,15 @@ RESPONSE_AUTO_EXECUTE=false
 
 ```bash
 # Check if server is running
-fda status
+./soceyes status
 
 # View logs
-fda logs -n 100
+./soceyes logs -n 100
 
 # Restart
-fda restart
+./soceyes restart
 
 # Clean slate (removes DB + logs)
-fda clean
-fda start
+./soceyes clean
+./soceyes start
 ```

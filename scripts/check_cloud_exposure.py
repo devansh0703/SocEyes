@@ -30,7 +30,7 @@ from app_shared.unified_store import init_db, store_event
 from app_shared.text_utils import now_utc
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [cloud] %(message)s")
-logger = logging.getLogger("fda.cloud")
+logger = logging.getLogger("soceyes.cloud")
 
 # IMDS endpoints
 AWS_IMDS = "http://169.254.169.254/latest/meta-data/"
@@ -196,7 +196,7 @@ def run_cloud_checks() -> list[dict[str, Any]]:
     for finding in all_findings:
         store_event(
             source="cloud-exposure",
-            index_name="fda-cloud-exposure",
+            index_name="soc-cloud-exposure",
             title=finding["title"],
             message=finding["message"],
             severity=finding["severity"],

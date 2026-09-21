@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-fda - FDA Cyber Control CLI (Standalone)
+soceyes - SocEyes CLI (Standalone)
 No Docker, no Elasticsearch, no JVM. SQLite backend, single-process server.
 """
 from __future__ import annotations
@@ -33,9 +33,9 @@ if PROJECT_ROOT is None:
 
 ENV_FILE = PROJECT_ROOT / ".env"
 ENV_EXAMPLE = PROJECT_ROOT / ".env.example"
-VENV_DIR = PROJECT_ROOT / ".venv-fda"
-PID_FILE = PROJECT_ROOT / "state" / "fda_server.pid"
-LOG_FILE = PROJECT_ROOT / "state" / "fda_server.log"
+VENV_DIR = PROJECT_ROOT / ".venv-soceyes"
+PID_FILE = PROJECT_ROOT / "state" / "soceyes_server.pid"
+LOG_FILE = PROJECT_ROOT / "state" / "soceyes_server.log"
 STATE_DIR = PROJECT_ROOT / "state"
 FRONTEND_DIST = PROJECT_ROOT / "frontend"
 
@@ -97,7 +97,7 @@ def check_python_version():
 
 
 def cmd_install(args):
-    color_print("Installing FDA Cyber Control (standalone)...", "bold")
+    color_print("Installing SocEyes (standalone)...", "bold")
     check_python_version()
     if not ENV_FILE.exists():
         if ENV_EXAMPLE.exists():
@@ -105,7 +105,7 @@ def cmd_install(args):
             color_print(f"  Created {ENV_FILE} from .env.example", "green")
         else:
             color_print(f"  WARNING: .env.example not found", "yellow")
-            ENV_FILE.write_text("FDA_PORT=8000\n")
+            ENV_FILE.write_text("SOC_PORT=8000\n")
     else:
         color_print(f"  {ENV_FILE} already exists", "cyan")
     STATE_DIR.mkdir(exist_ok=True)
@@ -127,7 +127,7 @@ def cmd_install(args):
             color_print("  Frontend built", "green")
         else:
             color_print("  WARNING: npm not found", "yellow")
-    color_print("Install complete! Run:  fda start", "bold")
+    color_print("Install complete! Run:  soceyes start", "bold")
 
 
 def cmd_start(args):
@@ -137,21 +137,21 @@ def cmd_start(args):
         try:
             pid = int(PID_FILE.read_text().strip())
             os.kill(pid, 0)
-            color_print(f"Server already running (PID {pid}). Use:  fda stop", "yellow")
+            color_print(f"Server already running (PID {pid}). Use:  soceyes stop", "yellow")
             return
         except (OSError, ValueError):
             PID_FILE.unlink(missing_ok=True)
     if not FRONTEND_DIST.exists():
         color_print(f"WARNING: Frontend not built: {FRONTEND_DIST}", "yellow")
-    port = os.environ.get("FDA_PORT", "8000")
-    host = os.environ.get("FDA_HOST", "0.0.0.0")
-    color_print(f"Starting FDA Cyber Control on {host}:{port}...", "bold")
+    port = os.environ.get("SOC_PORT") or os.environ.get("FDA_PORT", "8000")
+    host = os.environ.get("SOC_HOST") or os.environ.get("FDA_HOST", "0.0.0.0")
+    color_print(f"Starting SocEyes on {host}:{port}...", "bold")
     uvicorn_cmd = f"{python_bin()} -m uvicorn backend.app.main:app --host {host} --port {port}"
     STATE_DIR.mkdir(exist_ok=True)
     log_handle = open(LOG_FILE, "a", encoding="utf-8")
     proc = subprocess.Popen(uvicorn_cmd, shell=True, cwd=str(PROJECT_ROOT),
                            stdout=log_handle, stderr=subprocess.STDOUT,
-                           env={**os.environ, "FDA_STATE_DIR": str(STATE_DIR)})
+                           env={**os.environ, "SOC_STATE_DIR": str(STATE_DIR)})
     PID_FILE.write_text(str(proc.pid))
     time.sleep(2)
     if proc.poll() is not None:
@@ -200,8 +200,8 @@ def cmd_restart(args):
 
 def cmd_status(args):
     load_env()
-    port = os.environ.get("FDA_PORT", "8000")
-    color_print("FDA Cyber Control - Status", "bold")
+    port = os.environ.get("SOC_PORT") or os.environ.get("FDA_PORT", "8000")
+    color_print("SocEyes - Status", "bold")
     print()
     running = False
     pid_str = "not running"
@@ -221,7 +221,7 @@ def cmd_status(args):
         color_print(f"  Health: {health.get('status', 'unknown')}", "green")
     except Exception as exc:
         color_print(f"  Health: unreachable ({exc})", "red")
-    db_path = STATE_DIR / "fda_events.sqlite"
+    db_path = STATE_DIR / "soceyes_events.sqlite"
     if db_path.exists():
         try:
             import sqlite3
@@ -305,7 +305,7 @@ def cmd_bootstrap(args):
 
 def cmd_dashboard(args):
     load_env()
-    port = os.environ.get("FDA_PORT", "8000")
+    port = os.environ.get("SOC_PORT") or os.environ.get("FDA_PORT", "8000")
     url = f"http://localhost:{port}/"
     color_print(f"Opening {url} ...", "cyan")
     webbrowser.open(url)
@@ -327,7 +327,7 @@ def cmd_stats(args):
 def cmd_clean(args):
     color_print("Cleaning runtime state...", "red")
     STATE_DIR.mkdir(exist_ok=True)
-    for f in STATE_DIR.glob("fda_events.sqlite*"):
+    for f in STATE_DIR.glob("soceyes_events.sqlite*"):
         f.unlink()
     if LOG_FILE.exists():
         LOG_FILE.unlink()
@@ -341,16 +341,16 @@ def cmd_clean(args):
 
 
 def cmd_version(args):
-    color_print("fda 2.0.0 - FDA Cyber Control (Standalone)", "bold")
+    color_print("SocEyes 2.0.0 (Standalone)", "bold")
     color_print(f"Project root: {PROJECT_ROOT}", "cyan")
     color_print(f"Python: {sys.version.split()[0]}", "cyan")
 
 
 def build_parser():
     import argparse
-    parser = argparse.ArgumentParser(prog="fda", description="FDA Cyber Control",
+    parser = argparse.ArgumentParser(prog="soceyes", description="SocEyes",
                                      formatter_class=argparse.RawDescriptionHelpFormatter,
-                                     epilog="Quick start:\n  fda install\n  fda start\n  fda bootstrap\n  fda dashboard")
+                                     epilog="Quick start:\n  soceyes install\n  soceyes start\n  soceyes bootstrap\n  soceyes dashboard")
     sub = parser.add_subparsers(dest="command", required=True)
     p = sub.add_parser("install")
     p.set_defaults(func=cmd_install)

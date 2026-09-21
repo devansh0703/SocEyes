@@ -1,4 +1,4 @@
-# Implementation Plan — FDA Cyber Control Real Build
+# Implementation Plan — SocEyes Real Build
 
 **Generated:** 2026-09-18  
 **Mode:** plan-eng-review  
@@ -31,7 +31,7 @@ Tests: `tests/test_orchestrator.py`, `tests/test_enforce.py`, `tests/test_ai_tri
 
 Files:
 - `agents/response_engine.py` — replace JSON registry with real nftables subprocess calls
-- `config/nftables/fda-rules.nft` — default nftables ruleset
+- `config/nftables/soceyes-rules.nft` — default nftables ruleset
 
 4. AI Triage
 

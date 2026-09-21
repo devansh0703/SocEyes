@@ -45,11 +45,11 @@ export function PackEditor() {
       } catch {
         // Endpoint not yet built — show local directories as packs
         setPacks([
-          { id: "network", name: "Network", description: "Network-based detections", rules_count: 0, category: "network", tags: ["suricata"], author: "fda", version: "1.0", updated_at: "" },
-          { id: "linux", name: "Linux", description: "Linux host detections", rules_count: 0, category: "linux", tags: ["auditd"], author: "fda", version: "1.0", updated_at: "" },
-          { id: "windows", name: "Windows", description: "Windows event detections", rules_count: 0, category: "windows", tags: ["sigma"], author: "fda", version: "1.0", updated_at: "" },
-          { id: "ml", name: "ML Anomaly", description: "Machine-learning anomaly detections", rules_count: 0, category: "ml", tags: ["anomaly"], author: "fda", version: "1.0", updated_at: "" },
-          { id: "threat_intel", name: "Threat Intel", description: "Threat intelligence feeds", rules_count: 0, category: "threat_intel", tags: ["ioc"], author: "fda", version: "1.0", updated_at: "" },
+          { id: "network", name: "Network", description: "Network-based detections", rules_count: 0, category: "network", tags: ["suricata"], author: "soceyes", version: "1.0", updated_at: "" },
+          { id: "linux", name: "Linux", description: "Linux host detections", rules_count: 0, category: "linux", tags: ["auditd"], author: "soceyes", version: "1.0", updated_at: "" },
+          { id: "windows", name: "Windows", description: "Windows event detections", rules_count: 0, category: "windows", tags: ["sigma"], author: "soceyes", version: "1.0", updated_at: "" },
+          { id: "ml", name: "ML Anomaly", description: "Machine-learning anomaly detections", rules_count: 0, category: "ml", tags: ["anomaly"], author: "soceyes", version: "1.0", updated_at: "" },
+          { id: "threat_intel", name: "Threat Intel", description: "Threat intelligence feeds", rules_count: 0, category: "threat_intel", tags: ["ioc"], author: "soceyes", version: "1.0", updated_at: "" },
         ]);
       }
     };

@@ -70,8 +70,8 @@ function combineDateTime(date: string, time: string): string {
 export function Nav() {
   const pathname = usePathname();
   const [viewState, setViewState] = useGlobalViewState();
-  const [runState, setRunState] = useCachedState<RunState>("fda-cache:run-current", { active: false });
-  const [history, setHistory] = useCachedState<RunState[]>("fda-cache:run-history", []);
+  const [runState, setRunState] = useCachedState<RunState>("soceyes-cache:run-current", { active: false });
+  const [history, setHistory] = useCachedState<RunState[]>("soceyes-cache:run-history", []);
   const [alertCount, setAlertCount] = useState<number | null>(null);
   const autoStartInFlight = useRef(false);
   const lastAutoStartAttemptMs = useRef(0);
@@ -113,15 +113,15 @@ export function Nav() {
         ]);
         setRunState(startedCurrent);
         setHistory(startedPast.items);
-        writeCached("fda-cache:run-current", startedCurrent);
-        writeCached("fda-cache:run-history", startedPast.items);
+        writeCached("soceyes-cache:run-current", startedCurrent);
+        writeCached("soceyes-cache:run-history", startedPast.items);
         return;
       }
     }
     setRunState(current);
     setHistory(past.items);
-    writeCached("fda-cache:run-current", current);
-    writeCached("fda-cache:run-history", past.items);
+    writeCached("soceyes-cache:run-current", current);
+    writeCached("soceyes-cache:run-history", past.items);
   }
 
   useEffect(() => {

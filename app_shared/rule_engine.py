@@ -87,6 +87,41 @@ def event_doc(ev: dict[str, Any]) -> dict[str, Any]:
             doc["data"] = text
         except (ValueError, TypeError):
             pass
+
+    # Threat-intel enrichment (the enrich-index the Elastic TI rules join
+    # against): expose indicator hits under their ECS field names so queries
+    # like ``threat.indicator.ip:*`` and ``threat.indicator.matched.field``
+    # evaluate against real feed data instead of being vacuous.
+    try:
+        from app_shared import threat_intel as _ti
+
+        hits: list[dict[str, Any]] = []
+        for ipf in ("source_ip", "destination_ip"):
+            ind = _ti.lookup_ip(ev.get(ipf) or "")
+            if ind:
+                hits.append({**ind, "matched_field": f"source.{ipf.split('_')[0]}.ip"})
+        for df in ("message", "payload", "title"):
+            text_v = str(ev.get(df) or "")
+            if not text_v:
+                continue
+            for tok in text_v.split():
+                if "." in tok and len(tok) > 4:
+                    ind = _ti.lookup_domain(tok.rstrip(".,;:)'\""))
+                    if ind:
+                        hits.append({**ind, "matched_field": "url.domain"})
+                        break
+            if hits and df != "message":
+                break
+        if hits:
+            first = hits[0]
+            doc["threat_indicator_ip"] = first.get("value", "")
+            doc["threat_indicator_type"] = first.get("type", "")
+            doc["threat_indicator_matched_field"] = first.get("matched_field", "")
+            doc["threat_indicator_severity"] = first.get("severity", "medium")
+            doc["threat_indicator_feed"] = first.get("feed", "")
+            doc["threat_indicator_matched"] = "true"
+    except Exception:
+        pass
     return doc
 
 
@@ -145,6 +180,13 @@ def _field_getter(field: str) -> Callable[[dict[str, Any]], str]:
         "Image": "process_name",
         "ParentImage": "process_name",
         "ServiceName": "title",
+        # threat-intel enrich fields (populated by event_doc from the TI store)
+        "threat.indicator.ip": "threat_indicator_ip",
+        "threat.indicator.matched.field": "threat_indicator_matched_field",
+        "threat.indicator.severity": "threat_indicator_severity",
+        "threat.indicator.provider": "threat_indicator_feed",
+        "threat.feed.name": "threat_indicator_feed",
+        "threat.indicator.type": "threat_indicator_type",
     }
     if field in aliases:
         return lambda d, _k=aliases[field]: str(d.get(_k, "") or "")
@@ -703,13 +745,24 @@ def compile_elastic(doc: dict[str, Any]) -> tuple[Callable | None, str]:
     if lang == "esql":
         return None, "esql not supported"
     qtext = str(query)
-    # Existence-only queries (``field:*`` joined by and/or) cannot discriminate
-    # on a plain event stream: their real logic joins against an enrich index
-    # (threat-intel indicators, kibana signals) we do not feed. Firing them
-    # would alert on every event; skipping with a reason keeps coverage honest.
+    # Existence-only queries (``field:*`` joined by and/or): their real logic
+    # joins against an enrich index. If the fields are threat-indicator ones
+    # we now enrich events with, compile for real; otherwise they cannot
+    # discriminate on a plain event stream — skip with a reason.
     stripped = re.sub(r"[\w.*@\-]+(?:\.[\w.*@\-]+)*\s*:\s*\*", " ", qtext)
     stripped = re.sub(r"\b(and|or|not)\b", " ", stripped, flags=re.I)
     if not stripped.strip(" \t\r\n()\"'"):
+        # Threat-intel join rules: their enrich index is our TI store, which
+        # event_doc exposes as threat.indicator.* fields. Rewrite only when
+        # the queried existence fields are actually threat.indicator.* (or
+        # the rule is a named TI indicator-match rule) — not when some other
+        # dotted field merely contains the word "threat" (kibana signals).
+        exist_fields = re.findall(r"([\w.*@\-]+(?:\.[\w.*@\-]+)*)\s*:\s*\*", qtext)
+        ti_field = any(f.lower().startswith("threat.indicator") for f in exist_fields)
+        title_l = str(doc.get("title") or "").lower()
+        ti_rule = "threat intel" in title_l or "indicator match" in title_l
+        if ti_field or ti_rule:
+            return _compile_elastic_query("threat.indicator.matched.field:*")
         return None, "existence-only query (enrich-index rule)"
     if lang == "eql" or (isinstance(query, str) and re.match(r"^\s*\w+\s+where\b", query)):
         # sequence with `by` keys and >1 branch: stateless degrade to branch 1
@@ -939,7 +992,9 @@ class CompiledCatalog:
                 if engine == "sigma":
                     matcher, reason = compile_sigma(doc)
                 elif engine == "elastic":
-                    matcher, reason = compile_elastic(doc)
+                    # Title lives on the catalog row (the unwrapped raw may
+                    # not carry it); TI join rules key their rewrite on it.
+                    matcher, reason = compile_elastic({**doc, "title": row.get("title", "")})
                 elif engine == "wazuh":
                     # The unwrapped raw for wazuh carries only group/level;
                     # the id needed to find the <rule> node lives on the row.

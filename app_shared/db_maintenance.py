@@ -20,15 +20,15 @@ import sqlite3
 import threading
 import time
 
-logger = logging.getLogger("fda.db.maintenance")
+logger = logging.getLogger("soceyes.db.maintenance")
 
 # WAL pages before an automatic checkpoint (page size is typically 4 kB, so
 # 2000 pages ~= 8 MB of WAL — plenty for bursty ingest, tiny on disk).
-WAL_AUTOCHECKPOINT_PAGES = int(os.environ.get("FDA_WAL_AUTOCHECKPOINT_PAGES", "2000"))
+WAL_AUTOCHECKPOINT_PAGES = int(os.environ.get("SOC_WAL_AUTOCHECKPOINT_PAGES", "2000"))
 # How often the maintenance thread forces a truncating checkpoint.
-WAL_MAINTENANCE_INTERVAL_SECONDS = int(os.environ.get("FDA_WAL_MAINTENANCE_SECONDS", "900"))
+WAL_MAINTENANCE_INTERVAL_SECONDS = int(os.environ.get("SOC_WAL_MAINTENANCE_SECONDS", "900"))
 # Soft cap for the WAL file; a bigger file triggers an immediate checkpoint.
-WAL_SOFT_MAX_BYTES = int(os.environ.get("FDA_WAL_SOFT_MAX_BYTES", str(64 * 1024 * 1024)))
+WAL_SOFT_MAX_BYTES = int(os.environ.get("SOC_WAL_SOFT_MAX_BYTES", str(64 * 1024 * 1024)))
 
 _maintenance_thread: threading.Thread | None = None
 # Clear = running. A separate shutdown event is used for sleep/wait so the

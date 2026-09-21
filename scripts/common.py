@@ -133,7 +133,7 @@ def ensure_linux_auditd_template() -> None:
 def ensure_suricata_template() -> None:
     session = elastic_session()
     payload: dict[str, Any] = {
-        "index_patterns": ["fda-suricata.eve-*"],
+        "index_patterns": ["soc-suricata.eve-*"],
         "priority": 550,
         "template": {
             "settings": {
@@ -192,7 +192,7 @@ def ensure_suricata_template() -> None:
     }
 
     response = session.put(
-        f"{ELASTICSEARCH_URL}/_index_template/fda-suricata-eve",
+        f"{ELASTICSEARCH_URL}/_index_template/soc-suricata-eve",
         json=payload,
         timeout=30,
     )
@@ -282,8 +282,8 @@ def ensure_kibana_security_indices() -> None:
     security_indices = [
         "logs-*",
         "logs-linux.auditd-*",
-        "fda-suricata.eve-*",
-        "fda-syslog-*",
+        "soc-suricata.eve-*",
+        "soc-syslog-*",
         "winlogbeat-*",
         "filebeat-*",
         "auditbeat-*",

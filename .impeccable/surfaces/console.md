@@ -1,4 +1,4 @@
-# Surface brief — FDA Cyber Control console (UI v3)
+# Surface brief — SocEyes console (UI v3)
 
 Scope: the whole operator console (shell + Mission + Command Center + tables).
 Mode: Operate. The visitor assesses network state, decides, acts. Expression

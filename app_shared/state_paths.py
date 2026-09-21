@@ -3,7 +3,7 @@
 Every process in the stack (API, response engine, orchestration engine, helper
 scripts) reads and writes JSON/JSONL files under one directory:
 
-    $FDA_STATE_DIR  (default: ./state)
+    $SOC_STATE_DIR  (default: ./state; legacy $SOC_STATE_DIR still honored)
 
 Keeping the location configurable means containers no longer have to guess, and
 it removes the old behaviour where a process that could not write to `state/`
@@ -28,7 +28,7 @@ LEGACY_FALLBACK_ROOT = Path("/tmp/fda-runtime")
 
 def state_root() -> Path:
     """Directory that holds all runtime state for this deployment."""
-    configured = os.environ.get("FDA_STATE_DIR", "").strip()
+    configured = (os.environ.get("SOC_STATE_DIR") or os.environ.get("SOC_STATE_DIR") or "").strip()
     return Path(configured) if configured else Path(DEFAULT_STATE_DIR)
 
 

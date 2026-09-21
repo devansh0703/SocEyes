@@ -28,7 +28,7 @@ from uuid import uuid4
 
 from app_shared.text_utils import clean_text, normalize_severity, now_utc  # re-exported for backward compatibility
 
-logger = logging.getLogger("fda.unified_store")
+logger = logging.getLogger("soceyes.unified_store")
 
 # ---------------------------------------------------------------------------
 # Internal state
@@ -86,13 +86,20 @@ _sqlite_conn: sqlite3.Connection | None = None
 def _default_db() -> Path:
     """Resolve the events DB path at call time from the configured state root.
 
-    Resolving per call (instead of at import time) keeps ``FDA_STATE_DIR``
+    Resolving per call (instead of at import time) keeps ``SOC_STATE_DIR``
     honored by processes that set it late, and keeps every deployment's data
     inside the directory the operator actually configured.
     """
     from app_shared.state_paths import state_path
 
-    return state_path("fda_events.sqlite")
+    db = state_path("soceyes_events.sqlite")
+    # Continuity: deployments that started pre-rebrand have all data in
+    # fda_events.sqlite. Keep reading/writing it until an operator migrates.
+    if not db.exists():
+        legacy = db.with_name("fda_events.sqlite")
+        if legacy.exists():
+            return legacy
+    return db
 
 
 def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
@@ -102,10 +109,15 @@ def init_db(db_path: str | Path | None = None) -> sqlite3.Connection:
         db_path = _default_db()
     db_path = Path(db_path)
     db_path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(db_path), check_same_thread=False)
+    # busy_timeout: every thread shares this process-wide connection; under
+    # cold-start contention (seeder + detectors + response engine + WAL
+    # maintenance) writers must wait for the lock instead of failing fast —
+    # an instant SQLITE_BUSY here drops the agent's ingest queue.
+    conn = sqlite3.connect(str(db_path), check_same_thread=False, timeout=30)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=30000")
     from app_shared.db_maintenance import apply_footprint_pragmas, start_wal_maintenance
     apply_footprint_pragmas(conn)
     start_wal_maintenance(str(db_path))
@@ -591,12 +603,12 @@ def store_alert(
 # ---------------------------------------------------------------------------
 
 _SOURCE_INDEX_MAP = {
-    "suricata": "fda-suricata.eve-*",
+    "suricata": "soc-suricata.eve-*",
     "wazuh": "wazuh-alerts-*",
     "elastic": ".alerts-security.alerts-*",
     "response": "security-response-*",
-    "run": "fda-runs-*",
-    "capture": "fda-agent-capture",
+    "run": "soc-runs-*",
+    "capture": "soc-agent-capture",
 }
 
 
@@ -1122,7 +1134,7 @@ def get_analytics_summary(
             # Suricata aggregations
             suricata: dict[str, Any] = {}
             try:
-                r = session.post(f"{ELASTICSEARCH_URL}/fda-suricata.eve-*/_search", json=suricata_payload, timeout=15)
+                r = session.post(f"{ELASTICSEARCH_URL}/soc-suricata.eve-*/_search", json=suricata_payload, timeout=15)
                 if r.status_code == 200:
                     suricata = r.json()
             except Exception:
@@ -1577,7 +1589,7 @@ def prune_events(retention_hours: int = 24) -> dict[str, Any]:
         try:
             from app_shared.es_client import ELASTICSEARCH_URL, get_es_client
             session = get_es_client()
-            for index in ["fda-suricata.eve-*", "wazuh-alerts-*", "security-response-*", ".alerts-security.alerts-*"]:
+            for index in ["soc-suricata.eve-*", "wazuh-alerts-*", "security-response-*", ".alerts-security.alerts-*"]:
                 payload = {
                     "query": {
                         "range": {"@timestamp": {"lt": cutoff}}

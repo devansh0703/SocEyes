@@ -90,8 +90,8 @@ type Analytics = {
 
 export function LogExplorer() {
   const [viewState] = useGlobalViewState();
-  const [groupedLogs, setGroupedLogs] = useCachedState<GroupedLog[]>("fda-cache:logs-grouped", []);
-  const [analytics, setAnalytics] = useCachedState<Analytics>("fda-cache:logs-analytics", {
+  const [groupedLogs, setGroupedLogs] = useCachedState<GroupedLog[]>("soceyes-cache:logs-grouped", []);
+  const [analytics, setAnalytics] = useCachedState<Analytics>("soceyes-cache:logs-analytics", {
     timeline: [],
     suricata_event_types: [],
     suricata_protocols: [],
@@ -100,8 +100,8 @@ export function LogExplorer() {
   });
   const [selectedGroupId, setSelectedGroupId] = useState("");
   const [detail, setDetail] = useState<LogDetailPayload | null>(null);
-  const [runState, setRunState] = useCachedState<RunState>("fda-cache:run-current", { active: false });
-  const [history, setHistory] = useCachedState<RunState[]>("fda-cache:run-history", []);
+  const [runState, setRunState] = useCachedState<RunState>("soceyes-cache:run-current", { active: false });
+  const [history, setHistory] = useCachedState<RunState[]>("soceyes-cache:run-history", []);
   const [runTimeline, setRunTimeline] = useState<TimelinePayload | null>(null);
   const [terminalLines, setTerminalLines] = useState<string[]>([]);
 
@@ -138,10 +138,10 @@ export function LogExplorer() {
       setAnalytics(charts);
       setRunState(currentRun);
       setHistory(runHistory.items || []);
-      writeCached("fda-cache:logs-grouped", groups.items || []);
-      writeCached("fda-cache:logs-analytics", charts);
-      writeCached("fda-cache:run-current", currentRun);
-      writeCached("fda-cache:run-history", runHistory.items || []);
+      writeCached("soceyes-cache:logs-grouped", groups.items || []);
+      writeCached("soceyes-cache:logs-analytics", charts);
+      writeCached("soceyes-cache:run-current", currentRun);
+      writeCached("soceyes-cache:run-history", runHistory.items || []);
       appendTerminal(`refresh: ${groups.items.length} grouped events loaded`);
     };
 

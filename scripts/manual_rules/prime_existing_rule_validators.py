@@ -48,7 +48,7 @@ def prime_elastic(path: Path) -> None:
     payload["interval"] = "1m"
     payload["from"] = "now-2m"
     if path.name == "discovery_potential_network_sweep_detected.toml":
-        payload["index"] = ["fda-suricata.eve-*"]
+        payload["index"] = ["soc-suricata.eve-*"]
     else:
         payload["index"] = ["custom-generic-*"]
     upsert_detection_rule(payload)

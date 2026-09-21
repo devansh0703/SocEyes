@@ -53,11 +53,11 @@ The platform is split into five layers.
 Inputs arrive from:
 
 - `ingest/auditd/audit.log`
-- `ingest/syslog/fda.log`
+- `ingest/syslog/soc.log`
 - `ingest/json/events.jsonl`
 - `ingest/pcap/*.pcap`
 - `ingest/suricata/eve.json`
-- `ingest/suricata/fda-eve.jsonl`
+- `ingest/suricata/soc-eve.jsonl`
 
 The project includes manual telemetry generators in `scripts/generators/` that emit safe audit, syslog, JSON, and PCAP inputs for live validation against existing rules.
 
@@ -276,7 +276,7 @@ Archives are also visible in `wazuh-archives-*`.
 PCAP files are processed by Suricata.
 Suricata emits EVE data that is ingested into:
 
-- `fda-suricata.eve-*`
+- `soc-suricata.eve-*`
 - compact Suricata summaries for Wazuh correlation
 
 ## How Mapping Works

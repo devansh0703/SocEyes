@@ -11,7 +11,7 @@ import time
 from pathlib import Path
 
 # Set up temp state before imports
-os.environ.setdefault("FDA_STATE_DIR", tempfile.mkdtemp(prefix="fda-pipeline-test-"))
+os.environ.setdefault("SOC_STATE_DIR", tempfile.mkdtemp(prefix="fda-pipeline-test-"))
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
@@ -124,7 +124,7 @@ def test_pipeline_end_to_end():
     for i in range(5):
         test_events.append({
             "source": "capture-agent",
-            "index_name": "fda-agent-capture",
+            "index_name": "soc-agent-capture",
             "title": f"Captured packet {i}",
             "severity": "medium",
             "source_ip": f"203.0.113.{i}",

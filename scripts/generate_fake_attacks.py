@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Fake Attack Generator for FDA Detection System
+Fake Attack Generator for SocEyes
 
 This script generates realistic fake attacks that will be detected by:
 - Wazuh (Linux auditd rules)
@@ -372,7 +372,7 @@ class FakeAttackGenerator:
 def main():
     """Main entry point."""
     parser = argparse.ArgumentParser(
-        description="Generate fake attacks for FDA detection system testing"
+        description="Generate fake attacks for SocEyes testing"
     )
     parser.add_argument(
         "--type",

@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 from app_shared.unified_store import prune_events as _store_prune
 
-logger = logging.getLogger("fda.retention")
+logger = logging.getLogger("soceyes.retention")
 
 
 def read_retention_hours() -> int:

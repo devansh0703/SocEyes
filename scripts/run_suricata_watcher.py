@@ -16,9 +16,9 @@ PCAP_DIR = Path("ingest/pcap")
 SURICATA_DIR = Path("ingest/suricata")
 STATE_FILE = state_path("orchestration", "suricata_watcher.json")
 EVE_TARGET = SURICATA_DIR / "eve.json"
-WAZUH_EVE_TARGET = SURICATA_DIR / "fda-eve.jsonl"
+WAZUH_EVE_TARGET = SURICATA_DIR / "soc-eve.jsonl"
 # A malformed capture must not leave the suricata subprocess running forever.
-PCAP_REPLAY_TIMEOUT = int(os.environ.get("FDA_PCAP_TIMEOUT_SECONDS", "120"))
+PCAP_REPLAY_TIMEOUT = int(os.environ.get("SOC_PCAP_TIMEOUT_SECONDS", "120"))
 
 
 def load_seen() -> set[str]:
@@ -44,7 +44,7 @@ def compact_wazuh_event(event: dict) -> dict | None:
     alert = event.get("alert") or {}
     flow = event.get("flow") or {}
     compact = {
-        "fda_source": "suricata",
+        "soc_source": "suricata",
         "timestamp": event.get("timestamp"),
         "event_type": event_type,
         "src_ip": event.get("src_ip"),

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FDA Cyber Control — Response Engine (Native)
+SocEyes — Response Engine (Native)
 
 Consumes high-severity alerts and runs the AI-assisted response loop:
 
@@ -16,7 +16,7 @@ Consumes high-severity alerts and runs the AI-assisted response loop:
    response event, so the UI shows what the AI decided and why.
 
 Safety features:
-- Dry-run mode by default (FDA_RESPONSE_DRY_RUN=true)
+- Dry-run mode by default (SOC_RESPONSE_DRY_RUN=true)
 - Auto-execution gated by response policy (auto_execute + engine enable)
 - Alerts are processed exactly once (processed-set persisted in state_kv)
 - Control-file entries expire with the enforcement TTL
@@ -46,21 +46,21 @@ from app_shared.unified_store import get_kv, init_db, search_alerts, set_kv, sto
 # Real enforcement via nftables (backend/app/core/enforce.py)
 from backend.app.core.enforce import EnforceAction, EnforcementPolicy, start_rollback_sweeper, stop_rollback_sweeper
 
-logger = logging.getLogger("fda.response-engine")
+logger = logging.getLogger("soceyes.response-engine")
 
 # ---------------------------------------------------------------------------
 # Configuration
 # ---------------------------------------------------------------------------
-AUTO_EXEC_INTERVAL = float(os.environ.get("FDA_RESPONSE_INTERVAL_SECONDS", "10"))
-MAX_ALERTS_PER_CYCLE = int(os.environ.get("FDA_RESPONSE_MAX_ALERTS", "10"))
-MIN_CONFIDENCE = float(os.environ.get("FDA_RESPONSE_MIN_CONFIDENCE", "0.5"))
+AUTO_EXEC_INTERVAL = float(os.environ.get("SOC_RESPONSE_INTERVAL_SECONDS", "10"))
+MAX_ALERTS_PER_CYCLE = int(os.environ.get("SOC_RESPONSE_MAX_ALERTS", "10"))
+MIN_CONFIDENCE = float(os.environ.get("SOC_RESPONSE_MIN_CONFIDENCE", "0.5"))
 PROCESSED_KEY = "response_engine.processed_alerts"
 PROCESSED_CAP = 1000
 
 
 def dry_run() -> bool:
-    """Dry-run is the safe default; FDA_RESPONSE_DRY_RUN=false enables live enforcement."""
-    return os.environ.get("FDA_RESPONSE_DRY_RUN", "true").lower() in ("true", "1", "yes")
+    """Dry-run is the safe default; SOC_RESPONSE_DRY_RUN=false enables live enforcement."""
+    return os.environ.get("SOC_RESPONSE_DRY_RUN", "true").lower() in ("true", "1", "yes")
 
 
 _engine_thread: threading.Thread | None = None
@@ -167,7 +167,7 @@ def execute_response_action(
         "message": message,
         "updated_at": timestamp,
         "dry_run": is_dry_run,
-        "ttl_seconds": int(os.environ.get("FDA_RESPONSE_TTL_SECONDS", "1800")),
+        "ttl_seconds": int(os.environ.get("SOC_RESPONSE_TTL_SECONDS", "1800")),
     }
 
     # Step 1: persist to the control file the API middleware reads

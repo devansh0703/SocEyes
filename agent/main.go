@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/devansh/fda/agent/capture"
+	"github.com/devansh/soceyes/agent/capture"
 )
 
 // Config for the agent.
@@ -190,12 +190,12 @@ func marshalBatch(batch [][]byte) []byte {
 
 func main() {
 	cfg := AgentConfig{
-		Interface:   envOr("FDA_AGENT_INTERFACE", "lo"),
-		APIURL:      envOr("FDA_API_URL", "http://127.0.0.1:8000"),
-		BatchSize:   envInt("FDA_AGENT_BATCH_SIZE", 10),
-		FlushEvery:  envSeconds("FDA_AGENT_FLUSH_SECONDS", 2*time.Second),
-		MaxBuffered: envInt("FDA_AGENT_MAX_BUFFERED", 50000),
-		MaxRetries:  envInt("FDA_AGENT_MAX_RETRIES", 3),
+		Interface:   envOr("SOC_AGENT_INTERFACE", "lo"),
+		APIURL:      envOr("SOC_API_URL", "http://127.0.0.1:8000"),
+		BatchSize:   envInt("SOC_AGENT_BATCH_SIZE", 10),
+		FlushEvery:  envSeconds("SOC_AGENT_FLUSH_SECONDS", 2*time.Second),
+		MaxBuffered: envInt("SOC_AGENT_MAX_BUFFERED", 50000),
+		MaxRetries:  envInt("SOC_AGENT_MAX_RETRIES", 3),
 	}
 
 	apiURL := strings.TrimRight(cfg.APIURL, "/") + "/api/events/ingest"
@@ -230,7 +230,7 @@ func main() {
 	// CAP_NET_RAW, bad interface name) instead of idling silently forever.
 	go func() {
 		if err := capture.Capture(ctx, captureCfg); err != nil {
-			log.Printf("CAPTURE FATAL: %v (AF_PACKET needs root or CAP_NET_RAW; check FDA_AGENT_INTERFACE=%s)", err, cfg.Interface)
+			log.Printf("CAPTURE FATAL: %v (AF_PACKET needs root or CAP_NET_RAW; check SOC_AGENT_INTERFACE=%s)", err, cfg.Interface)
 			cancel()
 		}
 	}()
@@ -240,7 +240,7 @@ func main() {
 	ticker := time.NewTicker(cfg.FlushEvery)
 	defer ticker.Stop()
 
-	log.Printf("FDA agent: iface=%s -> %s (self-port %d excluded) batch=%d flush=%s buffer=%d host=%s",
+	log.Printf("SocEyes agent: iface=%s -> %s (self-port %d excluded) batch=%d flush=%s buffer=%d host=%s",
 		cfg.Interface, apiURL, selfPort, cfg.BatchSize, cfg.FlushEvery, cfg.MaxBuffered, host)
 
 	lastErrLog := time.Time{}
@@ -267,7 +267,7 @@ func main() {
 			}
 			shipper.add(marshalEvent(packetToEvent(pkt, host)))
 			// Ship only at max-POST size during bursts; the flush ticker
-			// (FDA_AGENT_FLUSH_SECONDS) covers normal-rate traffic. Flushing
+			// (SOC_AGENT_FLUSH_SECONDS) covers normal-rate traffic. Flushing
 			// per BatchSize stalled receives inside bursts and dropped packets.
 			if len(shipper.pending) >= maxPostEvents {
 				if err := shipper.flush(); err != nil {
@@ -308,7 +308,7 @@ func packetToEvent(p capture.Packet, host string) map[string]interface{} {
 	}
 	return map[string]interface{}{
 		"source":            "capture",
-		"index_name":        "fda-agent-capture",
+		"index_name":        "soc-agent-capture",
 		"title":             fmt.Sprintf("%s -> %s", p.SrcIP, p.DstIP),
 		"severity":          "medium",
 		"source_ip":         p.SrcIP,

@@ -3,5 +3,5 @@ from __future__ import annotations
 
 from pathlib import Path
 
-# Repository root (the fda/ directory containing backend/, app_shared/, state/...)
+# Repository root (the repository directory containing backend/, app_shared/, state/...)
 _ROOT = Path(__file__).resolve().parent.parent.parent

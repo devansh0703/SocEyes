@@ -9,9 +9,9 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-os.environ["FDA_STATE_DIR"] = tempfile.mkdtemp(prefix="fda-runtime-controls-")
+os.environ["SOC_STATE_DIR"] = tempfile.mkdtemp(prefix="fda-runtime-controls-")
 # Always re-read control files so a test sees the file it just wrote.
-os.environ["FDA_CONTROL_CACHE_TTL_SECONDS"] = "0"
+os.environ["SOC_CONTROL_CACHE_TTL_SECONDS"] = "0"
 
 from app_shared.state_paths import write_json  # noqa: E402
 from backend.app import runtime_controls  # noqa: E402

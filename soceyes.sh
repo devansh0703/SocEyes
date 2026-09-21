@@ -1,6 +1,6 @@
 #!/bin/bash
 #=============================================================================
-# FDA Cyber Control — Native IDS Process Manager
+# SocEyes — Native IDS Process Manager
 # 
 # Manages the full intrusion detection stack as native processes:
 #   - Elasticsearch (search engine + storage)
@@ -15,20 +15,20 @@
 #   - Retention cron
 #   - ZeroClaw agents
 #
-# Usage: ./fda.sh {install|start|stop|restart|status|attack|clean}
+# Usage: ./soceyes.sh {install|start|stop|restart|status|attack|clean}
 #=============================================================================
 
 set -euo pipefail
 
 # ── Paths ─────────────────────────────────────────────────────────────────
-FDA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-STATE_DIR="$FDA_DIR/state"
+SOC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+STATE_DIR="$SOC_DIR/state"
 LOG_DIR="$STATE_DIR/logs"
 PID_DIR="$STATE_DIR/pids"
 DATA_DIR="$STATE_DIR/data"
 CONFIG_DIR="$STATE_DIR/config"
-PCAP_DIR="$FDA_DIR/pcap"
-VENV_DIR="$FDA_DIR/.venv-fda"
+PCAP_DIR="$SOC_DIR/pcap"
+VENV_DIR="$SOC_DIR/.venv-soceyes"
 
 # ── Colors ────────────────────────────────────────────────────────────────
 RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'
@@ -79,7 +79,7 @@ wait_for_port() {
 
 # ── Install ──────────────────────────────────────────────────────────────
 do_install() {
-    echo -e "${BOLD}FDA Cyber Control — Installation${RESET}"
+    echo -e "${BOLD}SocEyes — Installation${RESET}"
     echo "=================================="
     
     # Python venv
@@ -90,20 +90,20 @@ do_install() {
     fi
     info "Installing Python dependencies..."
     "$VENV_DIR/bin/pip" install --upgrade pip -q
-    "$VENV_DIR/bin/pip" install -r "$FDA_DIR/requirements/api.txt" -q
+    "$VENV_DIR/bin/pip" install -r "$SOC_DIR/requirements/api.txt" -q
     ok "dependencies installed"
     
     # .env
-    if [ ! -f "$FDA_DIR/.env" ]; then
-        cp "$FDA_DIR/.env.example" "$FDA_DIR/.env"
+    if [ ! -f "$SOC_DIR/.env" ]; then
+        cp "$SOC_DIR/.env.example" "$SOC_DIR/.env"
         ok "Created .env"
     fi
     
     # Frontend
-    if [ ! -f "$FDA_DIR/frontend/index.html" ] && [ -f "$FDA_DIR/frontend/package.json" ]; then
+    if [ ! -f "$SOC_DIR/frontend/index.html" ] && [ -f "$SOC_DIR/frontend/package.json" ]; then
         if command -v npm >/dev/null 2>&1; then
             info "Building frontend..."
-            (cd "$FDA_DIR/frontend" && npm install --silent 2>/dev/null && npm run build)
+            (cd "$SOC_DIR/frontend" && npm install --silent 2>/dev/null && npm run build)
             ok "frontend built"
         else
             warn "npm not found — frontend will not be available"
@@ -112,7 +112,7 @@ do_install() {
     
     # Bootstrap rules (all four engines via the real seeder)
     info "Indexing detection rules (sigma, elastic, panther, wazuh)..."
-    cd "$FDA_DIR"
+    cd "$SOC_DIR"
     "$VENV_DIR/bin/python" -c "
 import sys
 sys.path.insert(0, '.')
@@ -125,15 +125,15 @@ print('Indexed:', seed_rules(Path('.')))
     
     echo ""
     echo -e "${GREEN}Installation complete!${RESET}"
-    echo "Start with: ./fda.sh start"
+    echo "Start with: ./soceyes.sh start"
     echo "Then open:  http://localhost:8000/"
 }
 
 # ── Start ─────────────────────────────────────────────────────────────────
 do_start() {
-    echo -e "${BOLD}FDA Cyber Control — Starting${RESET}"
+    echo -e "${BOLD}SocEyes — Starting${RESET}"
     echo "==============================="
-    cd "$FDA_DIR"
+    cd "$SOC_DIR"
     
     # 1. Elasticsearch
     if ! is_running elasticsearch; then
@@ -233,13 +233,13 @@ do_start() {
     
     # 8. Capture agent (packet capture -> /api/events/ingest)
     if ! is_running capture-agent; then
-        AGENT_BIN="$FDA_DIR/bin/fda-agent"
-        [ -x "$AGENT_BIN" ] || AGENT_BIN="$FDA_DIR/agent/fda-agent"
+        AGENT_BIN="$SOC_DIR/bin/soceyes-agent"
+        [ -x "$AGENT_BIN" ] || AGENT_BIN="$SOC_DIR/agent/soceyes-agent"
         if [ -x "$AGENT_BIN" ]; then
             info "Starting capture agent ($AGENT_BIN)..."
             start_service capture-agent "$AGENT_BIN"
         else
-            warn "Capture agent binary not found — build it with: cd agent && go build -o ../bin/fda-agent ."
+            warn "Capture agent binary not found — build it with: cd agent && go build -o ../bin/soceyes-agent ."
         fi
     else
         ok "Capture agent already running"
@@ -255,7 +255,7 @@ do_start() {
 
 # ── Stop ──────────────────────────────────────────────────────────────────
 do_stop() {
-    echo "Stopping FDA Cyber Control..."
+    echo "Stopping SocEyes..."
     for svc in capture-agent api suricata wazuh kibana logstash elasticsearch; do
         stop_service "$svc" 2>/dev/null || true
     done
@@ -271,7 +271,7 @@ do_restart() {
 
 # ── Status ────────────────────────────────────────────────────────────────
 do_status() {
-    echo -e "${BOLD}FDA Cyber Control — Status${RESET}"
+    echo -e "${BOLD}SocEyes — Status${RESET}"
     echo "=============================="
     local services="capture-agent elasticsearch logstash kibana wazuh suricata api"
     for svc in $services; do
@@ -296,7 +296,7 @@ do_status() {
 # ── Attack (generate test attacks) ──────────────────────────────────────
 do_attack() {
     echo -e "${BOLD}Generating test attack traffic...${RESET}"
-    cd "$FDA_DIR"
+    cd "$SOC_DIR"
     [ -d "$VENV_DIR" ] || do_install
     
     if [ -d "scripts/generators" ]; then
@@ -322,7 +322,7 @@ do_clean() {
     
     do_stop
     rm -rf "$STATE_DIR"
-    [ -f "$FDA_DIR/state/fda_events.sqlite" ] && rm -f "$FDA_DIR/state/fda_events.sqlite"*
+    [ -f "$SOC_DIR/state/fda_events.sqlite" ] && rm -f "$SOC_DIR/state/fda_events.sqlite"*
     echo -e "${GREEN}All data cleaned${RESET}"
 }
 
@@ -336,7 +336,7 @@ case "${1:-help}" in
     attack)  do_attack   ;;
     clean)   do_clean   ;;
     help|*)
-        echo "Usage: ./fda.sh {install|start|stop|restart|status|attack|clean}"
+        echo "Usage: ./soceyes.sh {install|start|stop|restart|status|attack|clean}"
         echo ""
         echo "Commands:"
         echo "  install   Install dependencies, build frontend, index rules"

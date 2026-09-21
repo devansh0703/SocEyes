@@ -1,18 +1,18 @@
-# FDA Cyber Control — single image, two roles.
+# SocEyes — single image, two roles.
 #
-# Build once:            docker build -t fda-cyber-control:latest .
+# Build once:            docker build -t soceyes:latest .
 # Server:                docker compose -f docker-compose.multihost.yml up -d
 # Sensor (remote host):  see docker-compose.multihost.yml header comments.
 #
 # The Go agent is built in stage 1; the server image carries both the API
-# and /app/bin/fda-agent so the same image works as a sensor container.
+# and /app/bin/soceyes-agent so the same image works as a sensor container.
 
 FROM golang:1.27-alpine AS agent-builder
 WORKDIR /src/agent
 COPY agent/go.mod agent/go.sum* ./
 RUN go mod download 2>/dev/null || true
 COPY agent/ .
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/fda-agent .
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/soceyes-agent .
 
 FROM python:3.12-slim AS server
 WORKDIR /app
@@ -33,15 +33,15 @@ COPY config/ ./config/
 COPY wazuh-ruleset/ ./wazuh-ruleset/
 COPY sigma/ ./sigma/
 COPY panther-analysis/ ./panther-analysis/
-COPY fda.sh ./
+COPY soceyes.sh ./
 
 # Prebuilt dashboard (frontend/out) if present; built on demand otherwise.
 COPY frontend/out/ ./frontend/out/
 
-COPY --from=agent-builder /out/fda-agent ./bin/fda-agent
+COPY --from=agent-builder /out/soceyes-agent ./bin/soceyes-agent
 
-ENV FDA_STATE_DIR=/data/state \
-    FDA_PORT=8000 \
+ENV SOC_STATE_DIR=/data/state \
+    SOC_PORT=8000 \
     PYTHONUNBUFFERED=1
 VOLUME ["/data/state"]
 EXPOSE 8000

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-FDA Cyber Control — Orchestration Engine (Native, ZeroClaw-style)
+SocEyes — Orchestration Engine (Native, ZeroClaw-style)
 
 Implements the 18-hand detection pipeline from scripts/run_orchestration_engine.py,
 adapted to run as a background thread with the unified store (ES → SQLite fallback).
@@ -72,7 +72,7 @@ logging.basicConfig(
         logging.FileHandler(ROOT / "state" / "logs" / "orchestration.log", mode="a"),
     ],
 )
-logger = logging.getLogger("fda.orchestration")
+logger = logging.getLogger("soceyes.orchestration")
 
 # ---------------------------------------------------------------------------
 # State
@@ -170,9 +170,9 @@ def _hand_wazuh_sensor(ctx: HandContext) -> None:
 
 
 def _hand_suricata_sensor(ctx: HandContext) -> None:
-    total = es_count("fda-suricata.eve-*")
-    flows = es_count("fda-suricata.eve-*", {"term": {"event_type": "flow"}})
-    alerts = es_count("fda-suricata.eve-*", {"term": {"event_type": "alert"}})
+    total = es_count("soc-suricata.eve-*")
+    flows = es_count("soc-suricata.eve-*", {"term": {"event_type": "flow"}})
+    alerts = es_count("soc-suricata.eve-*", {"term": {"event_type": "alert"}})
     ctx.metrics.update({"events": total, "flows": flows, "alerts": alerts})
     ctx.step("Inspect Suricata volume",
              f"{total} Suricata EVE events are available, including {flows} flows and {alerts} alerts.")
@@ -301,7 +301,7 @@ def _hand_evidence_curator(ctx: HandContext) -> None:
 
 
 def _hand_telemetry_curator(ctx: HandContext) -> None:
-    network = es_count("fda-suricata.eve-*", {"range": {"@timestamp": {"gte": "now-30m"}}})
+    network = es_count("soc-suricata.eve-*", {"range": {"@timestamp": {"gte": "now-30m"}}})
     process_events = es_count("log-catalog", {
         "bool": {"filter": [
             {"range": {"@timestamp": {"gte": "now-30m"}}},

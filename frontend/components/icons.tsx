@@ -1,4 +1,4 @@
-// FDA Cyber Control — custom SVG icon set.
+// SocEyes — custom SVG icon set.
 // 24x24 stroke icons matched to the tech-brutalist design system:
 // 2px strokes, square caps, no fills. Zero third-party icon code —
 // every glyph is drawn to match this product.

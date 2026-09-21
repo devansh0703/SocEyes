@@ -20,7 +20,7 @@ from backend.app.services import capture_detection as cd
 def _syn(src: str, dst: str, port: int, seconds_ago: int, **extra) -> dict:
     ts = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=seconds_ago)).isoformat()
     ev = {
-        "source": "capture", "index_name": "fda-agent-capture",
+        "source": "capture", "index_name": "soc-agent-capture",
         "source_ip": src, "destination_ip": dst, "destination_port": port,
         "protocol": "tcp", "network_transport": "tcp",
         "tcp_flags": 0x02, "timestamp": ts,
@@ -31,7 +31,7 @@ def _syn(src: str, dst: str, port: int, seconds_ago: int, **extra) -> dict:
 
 @pytest.fixture()
 def fresh_state(tmp_path, monkeypatch):
-    monkeypatch.setenv("FDA_STATE_DIR", str(tmp_path))
+    monkeypatch.setenv("SOC_STATE_DIR", str(tmp_path))
     cd._brute_windows.clear()
     cd._flood_windows.clear()
     cd._scan_windows.clear()

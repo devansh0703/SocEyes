@@ -1,6 +1,6 @@
 #!/bin/bash
 #=============================================================================
-# FDA Cyber Control — Wazuh Rules Installer
+# SocEyes — Wazuh Rules Installer
 
 # Downloads and installs the latest Wazuh rules, decoders, and SCA policies
 # from the official Wazuh repository when wazuh-manager is installed.
@@ -10,7 +10,7 @@ set -euo pipefail
 WAZUH_RULES_VERSION="4.14.4"
 WAZUH_RULES_URL="https://github.com/wazuh/wazuh-ruleset/archive/refs/tags/v${WAZUH_RULES_VERSION}.tar.gz"
 
-FDA_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SOC_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OSSEC_DIR="/var/ossec"
 
 if [ ! -d "$OSSEC_DIR" ]; then

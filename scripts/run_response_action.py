@@ -25,8 +25,8 @@ from common import ELASTICSEARCH_URL, elastic_session
 
 RESPONSE_ACTIONS_FILE = state_path("response", "actions.jsonl")
 # Child processes started from an alert-driven handler must be bounded.
-CONTROL_TIMEOUT_SECONDS = int(os.environ.get("FDA_CONTROL_TIMEOUT_SECONDS", "120"))
-HONEYPOT_TIMEOUT_SECONDS = int(os.environ.get("FDA_HONEYPOT_TIMEOUT_SECONDS", "240"))
+CONTROL_TIMEOUT_SECONDS = int(os.environ.get("SOC_CONTROL_TIMEOUT_SECONDS", "120"))
+HONEYPOT_TIMEOUT_SECONDS = int(os.environ.get("SOC_HONEYPOT_TIMEOUT_SECONDS", "240"))
 
 
 def parse_args() -> argparse.Namespace:

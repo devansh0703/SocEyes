@@ -12,11 +12,11 @@ import os
 import threading
 import time
 
-logger = logging.getLogger("fda.services.dashboard")
+logger = logging.getLogger("soceyes.services.dashboard")
 
 # --- dashboard payload cache (key -> (built_at, payload)) -------------------
-_DASHBOARD_TTL_SECONDS = float(os.environ.get("FDA_DASHBOARD_TTL_SECONDS", "30"))
-_DASHBOARD_REBUILD_WAIT_SECONDS = float(os.environ.get("FDA_DASHBOARD_REBUILD_WAIT_SECONDS", "45"))
+_DASHBOARD_TTL_SECONDS = float(os.environ.get("SOC_DASHBOARD_TTL_SECONDS", "30"))
+_DASHBOARD_REBUILD_WAIT_SECONDS = float(os.environ.get("SOC_DASHBOARD_REBUILD_WAIT_SECONDS", "45"))
 _dashboard_cache: dict[str, tuple[float, dict]] = {}
 _dashboard_rebuilding: set[str] = set()
 _dashboard_lock = threading.Lock()
